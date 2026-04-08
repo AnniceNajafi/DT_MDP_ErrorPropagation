@@ -1,0 +1,78 @@
+---
+title: "Figure 6: Action Mismatch Rate"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+```
+
+```{r source-formulation}
+#Source the pipeline (BaseMDP -> POMDP)
+source("POMDPFormulation.R")
+library(scales)
+
+theme_paper <- theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(hjust = 0.5, size = 20),
+  axis.text = element_text(size = 15),
+  text = element_text(size = 18),
+  legend.position = "bottom",
+  legend.text = element_text(size = 14)
+)
+```
+
+```{r compute-mismatch}
+#Action mismatch rate: time-weighted fraction of trajectory where
+#policy applies non-optimal action (500 trajectories, 20s each)
+set.seed(42)
+
+correct_map <- c("Nominal" = "NoAction", "SensorNoisy" = "DwSensorA",
+                 "DynamicsOff" = "ReidentPlant", "Drift" = "BiasCorrect")
+N_act <- 500
+mismatch_df <- data.frame()
+
+for (i in 1:N_act) {
+  tr <- gillespie_pomdp(Q_rate, A, pomdp$Gamma, pomdp$actions, O_mat, c_rate, 1, 20, r_disc)
+  sojourns <- diff(c(tr$times, 20))
+  correct <- mapply(function(a, s) a == correct_map[states[s]], tr$actions, tr$states)
+  mismatch_df <- rbind(mismatch_df, data.frame(
+    policy = "POMDP (PBVI)", mismatch_time = sum(sojourns[!correct]) / 20))
+
+  tr_m <- gillespie_mcda(Q_rate, mcda_ideal_action, O_mat, mcda_dwell_time, c_rate, 1, 20, r_disc)
+  sojourns_m <- diff(c(tr_m$times, 20))
+  correct_m <- mapply(function(a, s) a == correct_map[states[s]], tr_m$actions, tr_m$states)
+  mismatch_df <- rbind(mismatch_df, data.frame(
+    policy = "MCDA (TOPSIS)", mismatch_time = sum(sojourns_m[!correct_m]) / 20))
+}
+
+mismatch_summary <- aggregate(mismatch_time ~ policy, data = mismatch_df,
+                               FUN = function(x) c(mean = mean(x), se = sd(x)/sqrt(length(x))))
+mismatch_summary <- do.call(data.frame, mismatch_summary)
+colnames(mismatch_summary) <- c("policy", "mean_mismatch", "se")
+
+print(paste0("POMDP mismatch: ", round(mismatch_summary$mean_mismatch[mismatch_summary$policy == "POMDP (PBVI)"] * 100, 1), "%"))
+print(paste0("MCDA mismatch: ", round(mismatch_summary$mean_mismatch[mismatch_summary$policy == "MCDA (TOPSIS)"] * 100, 1), "%"))
+```
+
+```{r plot-figure6, fig.width=7, fig.height=5}
+pal_mismatch <- c("POMDP (PBVI)" = "#574964", "MCDA (TOPSIS)" = "#5A7863")
+
+ggplot(mismatch_summary, aes(x = policy, y = mean_mismatch, fill = policy)) +
+  geom_col(alpha = 0.85, width = 0.5) +
+  geom_errorbar(aes(ymin = mean_mismatch - 1.96 * se,
+                    ymax = mean_mismatch + 1.96 * se), width = 0.12) +
+  geom_text(aes(label = paste0(round(mean_mismatch * 100, 1), "%")),
+            vjust = -0.8, size = 5, fontface = "bold") +
+  scale_fill_manual(values = pal_mismatch) +
+  scale_y_continuous(labels = percent,
+                     limits = c(0, max(mismatch_summary$mean_mismatch) * 1.3)) +
+  labs(title = "Action Mismatch Rate: POMDP vs MCDA",
+       x = NULL, y = "Mismatch Rate") +
+  theme_paper + theme(legend.position = "none")
+```

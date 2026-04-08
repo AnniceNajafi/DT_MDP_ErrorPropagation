@@ -1,0 +1,118 @@
+---
+title: "Figure 3: Policy Performance Comparison"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+```
+
+```{r source-formulation}
+#Source the pipeline (BaseMDP -> POMDP)
+source("POMDPFormulation.R")
+library(scales)
+
+palette_policy <- c("Optimal MDP" = "#213C51", "POMDP (PBVI)" = "#574964",
+                    "MCDA (TOPSIS)" = "#5A7863", "No Intervention" = "darkred")
+
+safe_frac_in_nominal <- function(tr, T_end) {
+  n_ev <- length(tr$times)
+  if (n_ev == 0) return(NA_real_)
+  if (n_ev == 1) return(if (tr$states[1] == 1) 1.0 else 0.0)
+  occ <- 0
+  for (i in 1:(n_ev - 1))
+    if (tr$states[i] == 1) occ <- occ + (tr$times[i + 1] - tr$times[i])
+  dt_last <- T_end - tr$times[n_ev]
+  if (tr$states[n_ev] == 1) occ <- occ + dt_last
+  occ / T_end
+}
+
+theme_paper <- theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(hjust = 0.5, size = 20),
+  axis.text = element_text(size = 15),
+  text = element_text(size = 18),
+  legend.position = "bottom",
+  legend.text = element_text(size = 14)
+)
+```
+
+```{r compute-performance}
+#1000 trajectories per policy over 20s
+#Loop order: POMDP, MDP, MCDA, No Intervention (per iteration)
+set.seed(42)
+
+N_sim <- 1000; t_pts_p <- seq(0, 20, by = 0.2)
+pomdp_cr <- mdp_cr <- mcda_cr <- none_cr <- matrix(NA, N_sim, length(t_pts_p))
+frac_data <- data.frame()
+
+for (i in 1:N_sim) {
+  tr <- gillespie_pomdp(Q_rate, A, pomdp$Gamma, pomdp$actions, O_mat, c_rate, 1, 20, r_disc)
+  pomdp_cr[i, ] <- cum_reward_at_pts_pomdp(tr, t_pts_p, c_rate, r_disc)
+  frac_data <- rbind(frac_data, data.frame(policy = "POMDP (PBVI)", frac = safe_frac_in_nominal(tr, 20)))
+
+  tr <- gillespie_mdp(Q_rate, vi$policy, c_rate, 1, 20, r_disc)
+  mdp_cr[i, ] <- cum_reward_at_pts(tr, t_pts_p, vi$policy, c_rate, r_disc)
+  frac_data <- rbind(frac_data, data.frame(policy = "Optimal MDP", frac = safe_frac_in_nominal(tr, 20)))
+
+  tr <- gillespie_mcda(Q_rate, mcda_ideal_action, O_mat, mcda_dwell_time, c_rate, 1, 20, r_disc)
+  mcda_cr[i, ] <- cum_reward_at_pts_mcda(tr, t_pts_p, mcda_ideal_action, c_rate, r_disc)
+  frac_data <- rbind(frac_data, data.frame(policy = "MCDA (TOPSIS)", frac = safe_frac_in_nominal(tr, 20)))
+
+  tr <- gillespie_mdp(Q_rate, policy_none, c_rate, 1, 20, r_disc)
+  none_cr[i, ] <- cum_reward_at_pts(tr, t_pts_p, policy_none, c_rate, r_disc)
+  frac_data <- rbind(frac_data, data.frame(policy = "No Intervention", frac = safe_frac_in_nominal(tr, 20)))
+}
+
+print(paste0("Performance computed for ", N_sim, " trajectories x 4 policies."))
+```
+
+```{r assemble-dataframes}
+#Build cumulative reward band data
+pomdp_df <- data.frame()
+for (pol_name in c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervention")) {
+  mat <- switch(pol_name, "Optimal MDP" = mdp_cr, "POMDP (PBVI)" = pomdp_cr,
+                "MCDA (TOPSIS)" = mcda_cr, "No Intervention" = none_cr)
+  for (j in seq_along(t_pts_p)) {
+    vals <- mat[, j]
+    pomdp_df <- rbind(pomdp_df, data.frame(
+      time = t_pts_p[j], policy = pol_name, mean = mean(vals),
+      q05 = quantile(vals, 0.05), q25 = quantile(vals, 0.25),
+      q75 = quantile(vals, 0.75), q95 = quantile(vals, 0.95)))
+  }
+}
+pomdp_df$policy <- factor(pomdp_df$policy,
+  levels = c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervention"))
+frac_data$policy <- factor(frac_data$policy,
+  levels = c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervention"))
+```
+
+```{r plot-figure3, fig.width=14, fig.height=7}
+p3a <- ggplot(pomdp_df, aes(x = time, y = mean, colour = policy, fill = policy)) +
+  geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.10, colour = NA) +
+  geom_ribbon(aes(ymin = q25, ymax = q75), alpha = 0.20, colour = NA) +
+  geom_line(linewidth = 1.1) +
+  scale_colour_manual(values = palette_policy) +
+  scale_fill_manual(values = palette_policy) +
+  labs(tag = "A", title = "Cumulative Discounted Reward",
+       x = "Time (s)", y = "Cumulative Discounted Reward",
+       colour = "Policy", fill = "Policy") +
+  theme_paper
+
+p3b <- ggplot(frac_data, aes(x = frac, fill = policy, colour = policy)) +
+  geom_density(alpha = 0.3, linewidth = 0.8) +
+  scale_fill_manual(values = palette_policy) +
+  scale_colour_manual(values = palette_policy) +
+  scale_x_continuous(labels = percent) +
+  labs(tag = "B", title = "Time Spent in Nominal",
+       x = "Fraction of Time in Nominal", y = "Density",
+       fill = "Policy", colour = "Policy") +
+  theme_paper
+
+grid.arrange(p3a, p3b, ncol = 2)
+```

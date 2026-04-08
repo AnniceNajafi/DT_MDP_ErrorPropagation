@@ -1,0 +1,122 @@
+---
+title: "Figure 1: MDP Validation and Trajectory Analysis"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+```
+
+```{r source-formulation}
+#Source the pipeline (BaseMDP -> POMDP)
+source("POMDPFormulation.R")
+library(scales)
+
+palette_states <- c("Nominal" = "darkred", "SensorNoisy" = "#213C51",
+                    "DynamicsOff" = "#574964", "Drift" = "#5A7863")
+
+theme_paper <- theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(hjust = 0.5, size = 20),
+  axis.text = element_text(size = 15),
+  text = element_text(size = 18),
+  legend.position = "bottom",
+  legend.text = element_text(size = 14)
+)
+```
+
+```{r single-trajectory}
+#Panel A & B: Single Gillespie trajectory under optimal policy
+set.seed(42)
+set.seed(13)
+tr1 <- gillespie_mdp(Q_rate, vi$policy, c_rate, s0 = 1, T_end = 10, r_disc = r_disc)
+
+n_ev <- length(tr1$times)
+step_times <- numeric(0); step_states <- character(0); step_rr <- numeric(0)
+for (i in 1:n_ev) {
+  t_start <- tr1$times[i]
+  t_end_i <- if (i < n_ev) tr1$times[i + 1] else 10
+  s_i <- tr1$states[i]; a_i <- vi$policy[states[s_i]]; rr_i <- c_rate[a_i, s_i]
+  step_times <- c(step_times, t_start, t_end_i)
+  step_states <- c(step_states, states[s_i], states[s_i])
+  step_rr <- c(step_rr, rr_i, rr_i)
+}
+state_df <- data.frame(time = step_times, state = factor(step_states, levels = states))
+rr_df <- data.frame(time = step_times, reward_rate = step_rr)
+event_df <- data.frame(time = tr1$times, state = factor(states[tr1$states], levels = states))
+event_rr <- data.frame(time = tr1$times,
+  reward_rate = sapply(seq_along(tr1$times), function(i)
+    c_rate[vi$policy[states[tr1$states[i]]], tr1$states[i]]))
+
+print(paste0("Single trajectory: ", n_ev, " events over 10 s"))
+```
+
+```{r monte-carlo-validation}
+#Panel C: Monte Carlo validation (1000 trajectories) vs Bellman
+set.seed(42)
+R_pi_vec_local <- sapply(1:K, function(s) c_rate[vi$policy[states[s]], s])
+Q_pi_local <- matrix(0, K, K)
+for (s in 1:K) Q_pi_local[s, ] <- Q_rate[[vi$policy[states[s]]]][s, ]
+
+t_pts_val <- seq(0, 10, by = 0.1)
+bellman_curve <- sapply(t_pts_val, function(t) {
+  b0 <- c(1, 0, 0, 0)
+  b0 %*% solve(r_disc * diag(K) - Q_pi_local, R_pi_vec_local) -
+    b0 %*% expm((Q_pi_local - r_disc * diag(K)) * t) %*%
+    solve(r_disc * diag(K) - Q_pi_local, R_pi_vec_local)
+})
+
+N_val <- 1000
+cr_mat <- matrix(NA, N_val, length(t_pts_val))
+for (i in 1:N_val) {
+  tr <- gillespie_mdp(Q_rate, vi$policy, c_rate, s0 = 1, T_end = 10, r_disc = r_disc)
+  cr_mat[i, ] <- cum_reward_at_pts(tr, t_pts_val, vi$policy, c_rate, r_disc)
+}
+mc_mean <- colMeans(cr_mat)
+
+rel_err <- abs(mc_mean[length(t_pts_val)] - as.numeric(bellman_curve[length(t_pts_val)])) /
+           abs(as.numeric(bellman_curve[length(t_pts_val)])) * 100
+print(paste0("Relative error at T=10 s: ", round(rel_err, 4), "%"))
+
+val_df <- data.frame(
+  time = rep(t_pts_val, 2),
+  reward = c(mc_mean, as.numeric(bellman_curve)),
+  source = rep(c("Gillespie MC Mean (N=1000)", "Bellman (Analytical)"), each = length(t_pts_val))
+)
+```
+
+```{r plot-figure1, fig.width=9, fig.height=9}
+p1a <- ggplot(state_df, aes(x = time, y = state, colour = state)) +
+  geom_line(aes(group = 1), linewidth = 1.2, show.legend = FALSE) +
+  geom_point(data = event_df, aes(x = time, y = state, colour = state),
+             size = 2.5, stroke = 2, shape = 8) +
+  scale_colour_manual(values = palette_states, guide = "none") +
+  labs(tag = "A", title = "State Evolution Under Optimal MDP Policy",
+       x = NULL, y = "State") +
+  theme_paper + theme(legend.position = "none")
+
+p1b <- ggplot(rr_df, aes(x = time, y = reward_rate)) +
+  geom_line(linewidth = 1.2, colour = "#2C3E50") +
+  geom_point(data = event_rr, aes(x = time, y = reward_rate),
+             colour = "#355872", stroke = 2, size = 1.8, shape = 8) +
+  labs(tag = "B", title = "Instantaneous Reward Rate",
+       x = NULL, y = "c(s, a) [/s]") +
+  theme_paper
+
+p1c <- ggplot(val_df, aes(x = time, y = reward, colour = source, linetype = source)) +
+  geom_line(linewidth = 2) +
+  scale_colour_manual(values = c("Bellman (Analytical)" = "#5A7863",
+                                  "Gillespie MC Mean (N=1000)" = "#355872")) +
+  scale_linetype_manual(values = c("Bellman (Analytical)" = "solid",
+                                    "Gillespie MC Mean (N=1000)" = "dashed")) +
+  labs(tag = "C", title = "Monte Carlo Validation: Gillespie vs Bellman",
+       x = "Time (s)", y = "Cumulative Reward", colour = NULL, linetype = NULL) +
+  theme_paper
+
+grid.arrange(p1a, p1b, p1c, ncol = 1, heights = c(1.2, 1, 1))
+```

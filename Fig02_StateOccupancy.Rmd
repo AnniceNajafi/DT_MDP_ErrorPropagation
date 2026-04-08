@@ -1,0 +1,78 @@
+---
+title: "Figure 2: State-Occupancy Evolution Under Four Intervention Strategies"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+```
+
+```{r source-formulation}
+#Source the pipeline (BaseMDP -> POMDP)
+source("POMDPFormulation.R")
+library(scales)
+
+palette_states <- c("Nominal" = "darkred", "SensorNoisy" = "#213C51",
+                    "DynamicsOff" = "#574964", "Drift" = "#5A7863")
+
+theme_paper <- theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(hjust = 0.5, size = 20),
+  axis.text = element_text(size = 15),
+  text = element_text(size = 18),
+  legend.position = "bottom",
+  legend.text = element_text(size = 14)
+)
+```
+
+```{r compute-occupancy}
+#2000 trajectories per policy over 15s, starting from Nominal
+set.seed(42)
+
+N_occ <- 2000; t_bins <- seq(0, 15, by = 0.1)
+occ_data <- data.frame()
+
+for (pol_name in c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervention")) {
+  state_counts <- matrix(0, length(t_bins), K)
+  for (i in 1:N_occ) {
+    if (pol_name == "Optimal MDP") {
+      tr <- gillespie_mdp(Q_rate, vi$policy, c_rate, 1, 15, r_disc)
+    } else if (pol_name == "POMDP (PBVI)") {
+      tr <- gillespie_pomdp(Q_rate, A, pomdp$Gamma, pomdp$actions, O_mat, c_rate, 1, 15, r_disc)
+    } else if (pol_name == "MCDA (TOPSIS)") {
+      tr <- gillespie_mcda(Q_rate, mcda_ideal_action, O_mat, mcda_dwell_time, c_rate, 1, 15, r_disc)
+    } else {
+      tr <- gillespie_mdp(Q_rate, policy_none, c_rate, 1, 15, r_disc)
+    }
+    binned <- bin_trajectory(tr, t_bins, K)
+    for (j in seq_along(t_bins)) state_counts[j, binned[j]] <- state_counts[j, binned[j]] + 1
+  }
+  state_probs <- state_counts / N_occ
+  for (s in 1:K) {
+    occ_data <- rbind(occ_data, data.frame(
+      time = t_bins, probability = state_probs[, s],
+      state = states[s], policy = pol_name))
+  }
+}
+
+occ_data$policy <- factor(occ_data$policy,
+  levels = c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervention"))
+occ_data$state <- factor(occ_data$state, levels = states)
+
+print(paste0("State-occupancy computed for ", N_occ, " trajectories x 4 policies."))
+```
+
+```{r plot-figure2, fig.width=10, fig.height=8}
+ggplot(occ_data, aes(x = time, y = probability, colour = state)) +
+  geom_line(linewidth = 1.2) +
+  facet_wrap(~ policy, ncol = 2) +
+  scale_colour_manual(values = palette_states) +
+  labs(title = "State-Occupancy Evolution Under Four Intervention Strategies",
+       x = "Time (s)", y = "P(state)", colour = "State") +
+  theme_paper + theme(legend.position = "right")
+```

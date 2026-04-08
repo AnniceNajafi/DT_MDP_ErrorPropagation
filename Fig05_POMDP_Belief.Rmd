@@ -1,0 +1,124 @@
+---
+title: "Figure 5: POMDP Belief Trajectory Visualization"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+```
+
+```{r source-formulation}
+#Source the pipeline (BaseMDP -> POMDP)
+source("POMDPFormulation.R")
+library(scales)
+
+palette_states <- c("Nominal" = "darkred", "SensorNoisy" = "#213C51",
+                    "DynamicsOff" = "#574964", "Drift" = "#5A7863")
+palette_actions <- c("NoAction" = "#7EACB5", "DwSensorA" = "#355872",
+                     "DwSensorB" = "#213C51", "IncFilter" = "#574964",
+                     "ReidentPlant" = "#5A7863", "BiasCorrect" = "darkred")
+
+theme_paper <- theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(hjust = 0.5, size = 20),
+  axis.text = element_text(size = 15),
+  text = element_text(size = 18),
+  legend.position = "bottom",
+  legend.text = element_text(size = 14)
+)
+```
+
+```{r belief-tracker}
+#Gillespie that stores belief vectors at each event
+gillespie_pomdp_beliefs <- function(Q_list, A_list, pomdp_Gamma, pomdp_actions,
+                                     O_mat, R_rate, s0, T_end, r_disc) {
+  K <- nrow(Q_list[[1]]); sn <- rownames(Q_list[[1]])
+  cap <- 2000
+  times <- numeric(cap); st_seq <- integer(cap); obs_seq <- integer(cap)
+  act_seq <- character(cap); bel_mat <- matrix(NA, cap, K)
+  idx <- 1; t_now <- 0; s <- s0
+  b <- rep(0, K); b[s0] <- 1
+  current_action <- pomdp_action(b, pomdp_Gamma, pomdp_actions)
+  times[1] <- 0; st_seq[1] <- s; obs_seq[1] <- s
+  act_seq[1] <- current_action; bel_mat[1,] <- b
+  while (t_now < T_end) {
+    a <- current_action; Qa <- Q_list[[a]]
+    ro <- pmax(Qa[s, ], 0); ro[s] <- 0; lam <- sum(ro)
+    if (lam <= 0) break
+    tau <- rexp(1, lam); t_now <- t_now + tau
+    if (t_now > T_end) break
+    s <- sample.int(K, 1, prob = ro)
+    z <- sample.int(K, 1, prob = O_mat[s, ])
+    A_tau <- expm(Qa * tau)
+    b <- belief_update(b, a, z, A_tau, O_mat)
+    current_action <- pomdp_action(b, pomdp_Gamma, pomdp_actions)
+    idx <- idx + 1
+    if (idx > nrow(bel_mat)) {
+      times <- c(times, numeric(cap)); st_seq <- c(st_seq, integer(cap))
+      obs_seq <- c(obs_seq, integer(cap)); act_seq <- c(act_seq, character(cap))
+      bel_mat <- rbind(bel_mat, matrix(NA, cap, K))
+    }
+    times[idx] <- t_now; st_seq[idx] <- s; obs_seq[idx] <- z
+    act_seq[idx] <- current_action; bel_mat[idx,] <- b
+  }
+  list(times = times[1:idx], states = st_seq[1:idx], obs = obs_seq[1:idx],
+       actions = act_seq[1:idx], beliefs = bel_mat[1:idx, ])
+}
+```
+
+```{r search-trajectory}
+#Search across 500 seeds for a trajectory that visits all 4 states within 10s
+best_tr <- NULL; best_n <- 0
+for (seed in 1:500) {
+  set.seed(seed)
+  tr <- gillespie_pomdp_beliefs(Q_rate, A, pomdp$Gamma, pomdp$actions,
+                                 O_mat, c_rate, 1, 10, r_disc)
+  n_u <- length(unique(tr$states))
+  if (n_u > best_n) { best_n <- n_u; best_tr <- tr }
+  if (n_u >= 4) break
+}
+print(paste0("Selected seed: ", seed, " with ", best_n, " unique states, ",
+             length(best_tr$times), " events"))
+```
+
+```{r plot-figure5, fig.width=10, fig.height=9}
+#Panel A: Belief vector evolution
+bel_df <- data.frame(time = best_tr$times,
+  Nominal = best_tr$beliefs[,1], SensorNoisy = best_tr$beliefs[,2],
+  DynamicsOff = best_tr$beliefs[,3], Drift = best_tr$beliefs[,4])
+bel_long <- melt(bel_df, id.vars = "time", variable.name = "State", value.name = "Belief")
+
+#Panel B: True hidden state
+true_df <- data.frame(time = best_tr$times,
+                      state = factor(states[best_tr$states], levels = states))
+
+#Panel C: Actions selected
+act_df <- data.frame(time = best_tr$times,
+                     action = factor(best_tr$actions, levels = actions))
+
+p5a <- ggplot(bel_long, aes(x = time, y = Belief, colour = State)) +
+  geom_step(linewidth = 0.9) +
+  scale_colour_manual(values = palette_states) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(tag = "A", title = "POMDP Belief Vector Evolution", x = NULL, y = "Belief b(s)") +
+  theme_paper + theme(legend.position = "right")
+
+p5b <- ggplot(true_df, aes(x = time, y = state, colour = state)) +
+  geom_point(size = 2.5) +
+  scale_colour_manual(values = palette_states, guide = "none") +
+  labs(tag = "B", title = "True Hidden State", x = NULL, y = NULL) +
+  theme_paper + theme(legend.position = "none")
+
+p5c <- ggplot(act_df, aes(x = time, y = action, colour = action)) +
+  geom_point(size = 2.5) +
+  scale_colour_manual(values = palette_actions, guide = "none") +
+  labs(tag = "C", title = "Actions Selected", x = "Time (s)", y = NULL) +
+  theme_paper + theme(legend.position = "none")
+
+grid.arrange(p5a, p5b, p5c, ncol = 1, heights = c(2.5, 1.2, 1.2))
+```

@@ -1,0 +1,101 @@
+---
+title: "Figure 7: Fraction in Nominal Across Discount Factors"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+```
+
+```{r source-formulation}
+#Source the pipeline (BaseMDP -> POMDP)
+source("POMDPFormulation.R")
+library(scales)
+
+palette_policy <- c("Optimal MDP" = "#213C51", "POMDP (PBVI)" = "#574964",
+                    "MCDA (TOPSIS)" = "#5A7863", "No Intervention" = "darkred")
+
+safe_frac_in_nominal <- function(tr, T_end) {
+  n_ev <- length(tr$times)
+  if (n_ev == 0) return(NA_real_)
+  if (n_ev == 1) return(if (tr$states[1] == 1) 1.0 else 0.0)
+  occ <- 0
+  for (i in 1:(n_ev - 1))
+    if (tr$states[i] == 1) occ <- occ + (tr$times[i + 1] - tr$times[i])
+  dt_last <- T_end - tr$times[n_ev]
+  if (tr$states[n_ev] == 1) occ <- occ + dt_last
+  occ / T_end
+}
+
+theme_paper <- theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(hjust = 0.5, size = 20),
+  axis.text = element_text(size = 15),
+  text = element_text(size = 18),
+  legend.position = "bottom",
+  legend.text = element_text(size = 14)
+)
+```
+
+```{r sweep-gamma}
+#Sweep gamma in {0.90, 0.95, 0.99, 0.999}
+#Re-solve MDP and POMDP for each, simulate 300 trajectories over 15s
+set.seed(42)
+
+gamma_levels <- c(0.90, 0.95, 0.99, 0.999)
+N_gam <- 300; T_gam <- 15
+gamma_results <- data.frame()
+
+for (gam in gamma_levels) {
+  print(paste0("gamma = ", gam))
+  vi_g <- value_iteration(A, R_mat, gam)
+  r_disc_g <- -log(gam) / dt
+  c_rate_g <- R_mat / dt
+  bp <- generate_belief_points(K, n_random = 80)
+  pomdp_g <- pbvi_solve(A, O_mat, R_mat, gam, bp,
+                        max_horizon = 300, tol = 0.001, V_init = vi_g$V)
+  policy_n <- setNames(rep("NoAction", K), states)
+
+  for (pol_name in c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervention")) {
+    fracs <- numeric(N_gam)
+    for (i in 1:N_gam) {
+      if (pol_name == "Optimal MDP") {
+        tr <- gillespie_mdp(Q_rate, vi_g$policy, c_rate_g, 1, T_gam, r_disc_g)
+      } else if (pol_name == "POMDP (PBVI)") {
+        tr <- gillespie_pomdp(Q_rate, A, pomdp_g$Gamma, pomdp_g$actions,
+                              O_mat, c_rate_g, 1, T_gam, r_disc_g)
+      } else if (pol_name == "MCDA (TOPSIS)") {
+        tr <- gillespie_mcda(Q_rate, vi_g$policy, O_mat, mcda_dwell_time,
+                             c_rate_g, 1, T_gam, r_disc_g)
+      } else {
+        tr <- gillespie_mdp(Q_rate, policy_n, c_rate_g, 1, T_gam, r_disc_g)
+      }
+      fracs[i] <- safe_frac_in_nominal(tr, T_gam)
+    }
+    gamma_results <- rbind(gamma_results, data.frame(
+      gamma = gam, policy = pol_name,
+      mean_frac = mean(fracs, na.rm = TRUE),
+      se = sd(fracs, na.rm = TRUE) / sqrt(sum(!is.na(fracs)))))
+  }
+}
+
+gamma_results$policy <- factor(gamma_results$policy,
+  levels = c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervention"))
+print(paste0("Discount factor sweep complete."))
+```
+
+```{r plot-figure7, fig.width=9, fig.height=5.5}
+ggplot(gamma_results, aes(x = factor(gamma), y = mean_frac, colour = policy, group = policy)) +
+  geom_line(linewidth = 1) + geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean_frac - 1.96 * se, ymax = mean_frac + 1.96 * se), width = 0.1) +
+  scale_colour_manual(values = palette_policy) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Fraction in Nominal Across Discount Factors",
+       x = expression(gamma), y = "Mean Fraction in Nominal", colour = "Policy") +
+  theme_paper
+```

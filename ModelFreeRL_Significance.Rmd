@@ -1,0 +1,547 @@
+---
+title: "Model-Free RL Baselines and Statistical Significance (Paper Section 4 / Table 3)"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+```
+
+```{r source-formulation}
+#Source the pipeline (BaseMDP -> POMDP)
+source("POMDPFormulation.R")
+library(scales)
+library(knitr)
+
+palette_policy6 <- c("Optimal MDP"     = "#213C51",
+                     "POMDP (PBVI)"    = "#574964",
+                     "Q-Learning"      = "#7EACB5",
+                     "REINFORCE"       = "#355872",
+                     "MCDA (TOPSIS)"   = "#5A7863",
+                     "No Intervention" = "darkred")
+
+theme_paper <- theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(hjust = 0.5, size = 20),
+  axis.text = element_text(size = 15),
+  text = element_text(size = 18),
+  legend.position = "bottom",
+  legend.text = element_text(size = 14)
+)
+```
+
+```{r rl-environment}
+#RL environment wrapper around the Gillespie CTMC. Each step samples a
+#sojourn under the chosen action, transitions the hidden true state,
+#emits a noisy observation, and updates the belief via Bayesian filtering.
+#The agent never sees the true state, only observations and rewards.
+
+rl_env_new <- function(s0, T_end) {
+  b <- rep(0, K); b[s0] <- 1
+  list(s = s0, b = b, t_now = 0, T_end = T_end, done = FALSE)
+}
+
+rl_env_step <- function(env, action_idx) {
+  a  <- actions[action_idx]
+  Qa <- Q_rate[[a]]
+  s  <- env$s
+  ro <- pmax(Qa[s, ], 0); ro[s] <- 0
+  lam <- sum(ro)
+
+  if (lam <= 0 || env$done) {
+    dt_rem <- env$T_end - env$t_now
+    rew <- if (dt_rem > 0)
+      (c_rate[a, s] / r_disc) * exp(-r_disc * env$t_now) *
+      (1 - exp(-r_disc * dt_rem)) else 0
+    env$done <- TRUE
+    return(list(env = env, obs = s, reward = rew, done = TRUE))
+  }
+
+  tau <- rexp(1, lam)
+  if (env$t_now + tau > env$T_end) {
+    dt_rem <- env$T_end - env$t_now
+    rew <- (c_rate[a, s] / r_disc) * exp(-r_disc * env$t_now) *
+           (1 - exp(-r_disc * dt_rem))
+    env$t_now <- env$T_end; env$done <- TRUE
+    return(list(env = env, obs = s, reward = rew, done = TRUE))
+  }
+
+  rew <- (c_rate[a, s] / r_disc) * exp(-r_disc * env$t_now) *
+         (1 - exp(-r_disc * tau))
+  env$t_now <- env$t_now + tau
+
+  s_new <- sample.int(K, 1, prob = ro)
+  env$s <- s_new
+  z <- sample.int(K, 1, prob = O_mat[s_new, ])
+
+  A_tau  <- expm(Qa * tau)
+  b_pred <- as.numeric(env$b %*% A_tau)
+  b_new  <- b_pred * O_mat[, z]
+  bs <- sum(b_new)
+  env$b  <- if (bs > 0) b_new / bs else rep(1 / K, K)
+
+  list(env = env, obs = z, reward = rew, done = FALSE)
+}
+```
+
+```{r belief-grid}
+#Q-Learning belief discretization (paper Section 4.1).
+#Uniform K-simplex grid with spacing delta = 0.1 yields C(13,3) = 286 cells.
+
+generate_simplex_grid <- function(K, delta = 0.1) {
+  n <- round(1 / delta); pts <- list()
+  gen <- function(rem, depth, cur) {
+    if (depth == K) {
+      cur[K] <- rem
+      pts[[length(pts) + 1]] <<- cur / n
+      return()
+    }
+    for (v in 0:rem) { cur[depth] <- v; gen(rem - v, depth + 1, cur) }
+  }
+  gen(n, 1, numeric(K))
+  do.call(rbind, pts)
+}
+
+belief_grid <- generate_simplex_grid(K, delta = 0.1)
+n_grid <- nrow(belief_grid)
+print(paste0("Belief grid: ", n_grid, " points on the K=4 simplex (delta=0.1)"))
+
+nearest_grid <- function(b, grid)
+  which.min(rowSums(abs(sweep(grid, 2, b))))
+```
+
+```{r qlearning-train, cache=TRUE}
+#Tabular Q-learning on the discretized belief grid.
+#Hyperparameters per paper Section 5.1: alpha=0.1, gamma=0.99,
+#epsilon decays exponentially from 1.0 to 0.05 over 5000 episodes,
+#episode horizon T = 15 s.
+
+n_episodes_ql <- 5000
+alpha_ql      <- 0.1
+gamma_ql      <- 0.99
+T_rl          <- 15
+eps_schedule  <- exp(seq(log(1.0), log(0.05), length.out = n_episodes_ql))
+
+Q_table <- matrix(0, nrow = n_grid, ncol = M,
+                  dimnames = list(NULL, actions))
+episode_returns_ql <- numeric(n_episodes_ql)
+
+set.seed(123)
+for (ep in 1:n_episodes_ql) {
+  s0  <- sample.int(K, 1, prob = c(0.4, 0.2, 0.2, 0.2))
+  env <- rl_env_new(s0, T_rl)
+  eps <- eps_schedule[ep]
+  total_ret <- 0
+  g <- nearest_grid(env$b, belief_grid)
+
+  while (!env$done) {
+    a_idx <- if (runif(1) < eps) sample.int(M, 1) else which.max(Q_table[g, ])
+    step  <- rl_env_step(env, a_idx)
+    env   <- step$env
+    r     <- step$reward
+    total_ret <- total_ret + r
+
+    if (!step$done) {
+      g_next <- nearest_grid(env$b, belief_grid)
+      td_target <- r + gamma_ql * max(Q_table[g_next, ])
+      Q_table[g, a_idx] <- Q_table[g, a_idx] +
+        alpha_ql * (td_target - Q_table[g, a_idx])
+      g <- g_next
+    } else {
+      Q_table[g, a_idx] <- Q_table[g, a_idx] +
+        alpha_ql * (r - Q_table[g, a_idx])
+    }
+  }
+  episode_returns_ql[ep] <- total_ret
+}
+print(paste0("Q-Learning training complete. Mean return last 500 episodes: ",
+             round(mean(tail(episode_returns_ql, 500)), 3)))
+
+#Verify learned policy at corner beliefs (paper: should match MDP optimal)
+for (s in 1:K) {
+  b_corner <- rep(0, K); b_corner[s] <- 1
+  g <- nearest_grid(b_corner, belief_grid)
+  print(paste0("  b = ", states[s], " -> Q-Learning: ",
+               actions[which.max(Q_table[g, ])],
+               " (MDP: ", vi$policy[states[s]], ")"))
+}
+```
+
+```{r reinforce-features}
+#REINFORCE feature representation (paper Section 4.2):
+#11-dim phi(b) = (4 raw beliefs, 6 pairwise products, 1 belief entropy).
+
+n_features <- 11
+
+belief_features <- function(b) {
+  phi <- b
+  for (i in 1:3) for (j in (i + 1):4) phi <- c(phi, b[i] * b[j])
+  ent <- -sum(b * log(b + 1e-10))
+  c(phi, ent)
+}
+
+softmax_policy <- function(theta, phi) {
+  logits <- theta %*% phi
+  logits <- logits - max(logits)
+  as.numeric(exp(logits) / sum(exp(logits)))
+}
+
+softmax_log_grad <- function(theta, phi, a_idx) {
+  probs <- softmax_policy(theta, phi)
+  grad  <- matrix(0, nrow = M, ncol = n_features)
+  for (a in 1:M) {
+    ind <- if (a == a_idx) 1 else 0
+    grad[a, ] <- (ind - probs[a]) * phi
+  }
+  grad
+}
+```
+
+```{r reinforce-train, cache=TRUE}
+#Hyperparameters per paper Section 5.1: 10000 episodes, lr = 0.001,
+#running-mean baseline with decay 0.99, return-to-go variance reduction.
+
+n_episodes_re <- 10000
+lr_re         <- 0.001
+T_rl_re       <- 15
+
+set.seed(456)
+theta_re <- matrix(rnorm(M * n_features, sd = 0.01),
+                   nrow = M, ncol = n_features)
+baseline       <- 0
+baseline_decay <- 0.99
+episode_returns_re <- numeric(n_episodes_re)
+
+for (ep in 1:n_episodes_re) {
+  s0  <- sample.int(K, 1, prob = c(0.4, 0.2, 0.2, 0.2))
+  env <- rl_env_new(s0, T_rl_re)
+  log_grads <- list(); rewards <- numeric(0); step_count <- 0
+
+  while (!env$done) {
+    phi <- belief_features(env$b)
+    probs <- softmax_policy(theta_re, phi)
+    a_idx <- sample.int(M, 1, prob = probs)
+    step_count <- step_count + 1
+    log_grads[[step_count]] <- softmax_log_grad(theta_re, phi, a_idx)
+    step <- rl_env_step(env, a_idx)
+    env  <- step$env
+    rewards <- c(rewards, step$reward)
+  }
+
+  G <- sum(rewards)
+  episode_returns_re[ep] <- G
+  baseline <- baseline_decay * baseline + (1 - baseline_decay) * G
+
+  grad_sum <- matrix(0, nrow = M, ncol = n_features)
+  for (t in seq_along(log_grads)) {
+    G_t <- sum(rewards[t:length(rewards)])
+    grad_sum <- grad_sum + (G_t - baseline) * log_grads[[t]]
+  }
+  theta_re <- theta_re + lr_re * grad_sum
+}
+print(paste0("REINFORCE training complete. Mean return last 500 episodes: ",
+             round(mean(tail(episode_returns_re, 500)), 3)))
+
+#Verify learned policy at corner beliefs
+for (s in 1:K) {
+  b_corner <- rep(0, K); b_corner[s] <- 1
+  phi <- belief_features(b_corner)
+  probs <- softmax_policy(theta_re, phi)
+  print(paste0("  b = ", states[s], " -> REINFORCE: ",
+               actions[which.max(probs)],
+               " (MDP: ", vi$policy[states[s]], ")"))
+}
+```
+
+```{r gillespie-learned}
+#Gillespie simulators for the learned policies. Same belief tracking as
+#gillespie_pomdp; only the action selection rule differs.
+
+gillespie_qlearning <- function(s0, T_end) {
+  cap <- 2000
+  times <- numeric(cap); st_seq <- integer(cap); act_seq <- character(cap)
+  idx <- 1; t_now <- 0; s <- s0
+  b <- rep(0, K); b[s0] <- 1
+  g <- nearest_grid(b, belief_grid)
+  current_action <- actions[which.max(Q_table[g, ])]
+  times[1] <- 0; st_seq[1] <- s; act_seq[1] <- current_action
+
+  while (t_now < T_end) {
+    a  <- current_action
+    Qa <- Q_rate[[a]]
+    ro <- pmax(Qa[s, ], 0); ro[s] <- 0
+    lam <- sum(ro); if (lam <= 0) break
+    tau <- rexp(1, lam); t_now <- t_now + tau
+    if (t_now > T_end) break
+    s <- sample.int(K, 1, prob = ro)
+    z <- sample.int(K, 1, prob = O_mat[s, ])
+
+    A_tau  <- expm(Qa * tau)
+    b_pred <- as.numeric(b %*% A_tau)
+    b_new  <- b_pred * O_mat[, z]
+    bs <- sum(b_new)
+    b <- if (bs > 0) b_new / bs else rep(1 / K, K)
+
+    g <- nearest_grid(b, belief_grid)
+    current_action <- actions[which.max(Q_table[g, ])]
+
+    idx <- idx + 1
+    if (idx > length(times)) {
+      times <- c(times, numeric(cap)); st_seq <- c(st_seq, integer(cap))
+      act_seq <- c(act_seq, character(cap))
+    }
+    times[idx] <- t_now; st_seq[idx] <- s; act_seq[idx] <- current_action
+  }
+
+  times <- times[1:idx]; st_seq <- st_seq[1:idx]; act_seq <- act_seq[1:idx]
+  disc_ret <- 0
+  for (i in seq_along(times)) {
+    a_i <- act_seq[i]; c_i <- c_rate[a_i, st_seq[i]]
+    t_start <- times[i]
+    t_end_i <- if (i < idx) times[i + 1] else T_end
+    dt_seg  <- t_end_i - t_start
+    if (dt_seg > 0)
+      disc_ret <- disc_ret +
+        (c_i / r_disc) * exp(-r_disc * t_start) * (1 - exp(-r_disc * dt_seg))
+  }
+  list(times = times, states = st_seq, actions = act_seq, disc_return = disc_ret)
+}
+
+gillespie_reinforce <- function(s0, T_end) {
+  cap <- 2000
+  times <- numeric(cap); st_seq <- integer(cap); act_seq <- character(cap)
+  idx <- 1; t_now <- 0; s <- s0
+  b <- rep(0, K); b[s0] <- 1
+  phi <- belief_features(b)
+  current_action <- actions[which.max(softmax_policy(theta_re, phi))]
+  times[1] <- 0; st_seq[1] <- s; act_seq[1] <- current_action
+
+  while (t_now < T_end) {
+    a  <- current_action
+    Qa <- Q_rate[[a]]
+    ro <- pmax(Qa[s, ], 0); ro[s] <- 0
+    lam <- sum(ro); if (lam <= 0) break
+    tau <- rexp(1, lam); t_now <- t_now + tau
+    if (t_now > T_end) break
+    s <- sample.int(K, 1, prob = ro)
+    z <- sample.int(K, 1, prob = O_mat[s, ])
+
+    A_tau  <- expm(Qa * tau)
+    b_pred <- as.numeric(b %*% A_tau)
+    b_new  <- b_pred * O_mat[, z]
+    bs <- sum(b_new)
+    b <- if (bs > 0) b_new / bs else rep(1 / K, K)
+
+    phi <- belief_features(b)
+    current_action <- actions[which.max(softmax_policy(theta_re, phi))]
+
+    idx <- idx + 1
+    if (idx > length(times)) {
+      times <- c(times, numeric(cap)); st_seq <- c(st_seq, integer(cap))
+      act_seq <- c(act_seq, character(cap))
+    }
+    times[idx] <- t_now; st_seq[idx] <- s; act_seq[idx] <- current_action
+  }
+
+  times <- times[1:idx]; st_seq <- st_seq[1:idx]; act_seq <- act_seq[1:idx]
+  disc_ret <- 0
+  for (i in seq_along(times)) {
+    a_i <- act_seq[i]; c_i <- c_rate[a_i, st_seq[i]]
+    t_start <- times[i]
+    t_end_i <- if (i < idx) times[i + 1] else T_end
+    dt_seg  <- t_end_i - t_start
+    if (dt_seg > 0)
+      disc_ret <- disc_ret +
+        (c_i / r_disc) * exp(-r_disc * t_start) * (1 - exp(-r_disc * dt_seg))
+  }
+  list(times = times, states = st_seq, actions = act_seq, disc_return = disc_ret)
+}
+```
+
+```{r six-policy-mc, cache=TRUE}
+#Six-policy Monte Carlo evaluation (paper Section 5.9: N=2000 trajectories).
+set.seed(2026)
+N_comp <- 2000; T_comp <- 20
+
+returns_mat <- matrix(NA, N_comp, 6)
+colnames(returns_mat) <- c("Optimal MDP", "POMDP (PBVI)", "Q-Learning",
+                           "REINFORCE", "MCDA (TOPSIS)", "No Intervention")
+
+for (n in 1:N_comp) {
+  tr <- gillespie_mdp(Q_rate, vi$policy, c_rate, 1, T_comp, r_disc)
+  returns_mat[n, "Optimal MDP"] <- tr$disc_return
+
+  tr <- gillespie_pomdp(Q_rate, A, pomdp$Gamma, pomdp$actions,
+                        O_mat, c_rate, 1, T_comp, r_disc)
+  returns_mat[n, "POMDP (PBVI)"] <- tr$disc_return
+
+  tr <- gillespie_qlearning(1, T_comp)
+  returns_mat[n, "Q-Learning"] <- tr$disc_return
+
+  tr <- gillespie_reinforce(1, T_comp)
+  returns_mat[n, "REINFORCE"] <- tr$disc_return
+
+  tr <- gillespie_mcda(Q_rate, mcda_ideal_action, O_mat, mcda_dwell_time,
+                       c_rate, 1, T_comp, r_disc)
+  returns_mat[n, "MCDA (TOPSIS)"] <- tr$disc_return
+
+  tr <- gillespie_mdp(Q_rate, policy_none, c_rate, 1, T_comp, r_disc)
+  returns_mat[n, "No Intervention"] <- tr$disc_return
+}
+
+means <- colMeans(returns_mat)
+print(round(means, 2))
+```
+
+```{r significance-table}
+#Pairwise one-sided Wilcoxon rank-sum tests + Cliff's delta on adjacent
+#policies in the descending hierarchy (paper Section 5.9, Table 3).
+
+#Cliff's delta computed exactly via the Mann-Whitney U statistic to avoid
+#the O(mn) outer-product memory cost.
+cliffs_delta <- function(x, y) {
+  m <- length(x); n <- length(y)
+  combined <- c(x, y)
+  ranks <- rank(combined)
+  rx <- sum(ranks[1:m])
+  U  <- rx - m * (m + 1) / 2
+  2 * U / (m * n) - 1
+}
+
+cliffs_label <- function(d) {
+  ad <- abs(d)
+  if (ad < 0.147) "Negligible"
+  else if (ad < 0.33) "Small"
+  else if (ad < 0.474) "Medium"
+  else "Large"
+}
+
+#Order policies by mean return (descending)
+ord <- names(sort(means, decreasing = TRUE))
+print(paste0("Hierarchy by mean return: ", paste(ord, collapse = " > ")))
+
+sig_df <- data.frame(Comparison = character(0),
+                     p_value = character(0),
+                     Cliffs_delta = numeric(0),
+                     Effect_Size = character(0),
+                     stringsAsFactors = FALSE)
+
+for (i in 1:(length(ord) - 1)) {
+  better <- ord[i]; worse <- ord[i + 1]
+  x <- returns_mat[, better]; y <- returns_mat[, worse]
+  pv <- wilcox.test(x, y, alternative = "greater", exact = FALSE)$p.value
+  d  <- cliffs_delta(x, y)
+  sig_df <- rbind(sig_df, data.frame(
+    Comparison   = paste0(better, " vs ", worse),
+    p_value      = if (pv < 1e-3) "< 0.001" else format(round(pv, 4), nsmall = 4),
+    Cliffs_delta = round(d, 3),
+    Effect_Size  = cliffs_label(d),
+    stringsAsFactors = FALSE))
+}
+
+kable(sig_df,
+      caption = "Pairwise one-sided Wilcoxon rank-sum tests on adjacent policies (N = 2000 trajectories per policy). Cliff's delta thresholds follow Romano et al. (2006).")
+```
+
+```{r cum-reward-curves, cache=TRUE}
+#Cumulative discounted reward curves for all six policies, matching the
+#layout of Fig03 panel A but with the two model-free agents included.
+
+set.seed(2027)
+N_curve <- 500; t_pts <- seq(0, 20, by = 0.2)
+n_pts <- length(t_pts)
+
+cum_mats <- list(
+  "Optimal MDP"     = matrix(NA, N_curve, n_pts),
+  "POMDP (PBVI)"    = matrix(NA, N_curve, n_pts),
+  "Q-Learning"      = matrix(NA, N_curve, n_pts),
+  "REINFORCE"       = matrix(NA, N_curve, n_pts),
+  "MCDA (TOPSIS)"   = matrix(NA, N_curve, n_pts),
+  "No Intervention" = matrix(NA, N_curve, n_pts)
+)
+
+for (n in 1:N_curve) {
+  tr <- gillespie_mdp(Q_rate, vi$policy, c_rate, 1, 20, r_disc)
+  cum_mats[["Optimal MDP"]][n, ] <-
+    cum_reward_at_pts(tr, t_pts, vi$policy, c_rate, r_disc)
+
+  tr <- gillespie_pomdp(Q_rate, A, pomdp$Gamma, pomdp$actions,
+                        O_mat, c_rate, 1, 20, r_disc)
+  cum_mats[["POMDP (PBVI)"]][n, ] <- cum_reward_at_pts_pomdp(tr, t_pts, c_rate, r_disc)
+
+  tr <- gillespie_qlearning(1, 20)
+  cum_mats[["Q-Learning"]][n, ] <- cum_reward_at_pts_pomdp(tr, t_pts, c_rate, r_disc)
+
+  tr <- gillespie_reinforce(1, 20)
+  cum_mats[["REINFORCE"]][n, ] <- cum_reward_at_pts_pomdp(tr, t_pts, c_rate, r_disc)
+
+  tr <- gillespie_mcda(Q_rate, mcda_ideal_action, O_mat, mcda_dwell_time,
+                       c_rate, 1, 20, r_disc)
+  cum_mats[["MCDA (TOPSIS)"]][n, ] <-
+    cum_reward_at_pts_mcda(tr, t_pts, mcda_ideal_action, c_rate, r_disc)
+
+  tr <- gillespie_mdp(Q_rate, policy_none, c_rate, 1, 20, r_disc)
+  cum_mats[["No Intervention"]][n, ] <-
+    cum_reward_at_pts(tr, t_pts, policy_none, c_rate, r_disc)
+}
+
+curve_df <- data.frame()
+for (pol in names(cum_mats)) {
+  mat <- cum_mats[[pol]]
+  for (j in seq_along(t_pts)) {
+    curve_df <- rbind(curve_df, data.frame(
+      time = t_pts[j], policy = pol,
+      mean = mean(mat[, j]),
+      q25 = quantile(mat[, j], 0.25),
+      q75 = quantile(mat[, j], 0.75)))
+  }
+}
+curve_df$policy <- factor(curve_df$policy, levels = names(palette_policy6))
+```
+
+```{r plot-figure8, fig.width=10, fig.height=6.5}
+ggplot(curve_df, aes(x = time, y = mean, colour = policy, fill = policy)) +
+  geom_ribbon(aes(ymin = q25, ymax = q75), alpha = 0.15, colour = NA) +
+  geom_line(linewidth = 1.1) +
+  scale_colour_manual(values = palette_policy6) +
+  scale_fill_manual(values = palette_policy6) +
+  labs(title = "Six-Policy Cumulative Discounted Reward",
+       x = "Time (s)", y = "Cumulative Discounted Reward",
+       colour = "Policy", fill = "Policy") +
+  theme_paper
+```
+
+```{r training-curves, fig.width=10, fig.height=4.5}
+#Training-time learning curves for both model-free agents
+ql_df <- data.frame(
+  episode = 1:n_episodes_ql,
+  smoothed = as.numeric(stats::filter(episode_returns_ql,
+                                       rep(1 / 100, 100), sides = 1)),
+  agent = "Q-Learning"
+)
+re_df <- data.frame(
+  episode = 1:n_episodes_re,
+  smoothed = as.numeric(stats::filter(episode_returns_re,
+                                       rep(1 / 100, 100), sides = 1)),
+  agent = "REINFORCE"
+)
+
+p_ql <- ggplot(ql_df, aes(episode, smoothed)) +
+  geom_line(colour = palette_policy6["Q-Learning"], linewidth = 1) +
+  labs(tag = "A", title = "Q-Learning Training",
+       x = "Episode", y = "Smoothed Return (window=100)") +
+  theme_paper
+
+p_re <- ggplot(re_df, aes(episode, smoothed)) +
+  geom_line(colour = palette_policy6["REINFORCE"], linewidth = 1) +
+  labs(tag = "B", title = "REINFORCE Training",
+       x = "Episode", y = "Smoothed Return (window=100)") +
+  theme_paper
+
+grid.arrange(p_ql, p_re, ncol = 2)
+```

@@ -1,5 +1,5 @@
 ---
-title: "Figure 6: Action Mismatch Rate"
+title: "Figure 7: Action Mismatch Rate"
 author: "Annice Najafi"
 output: html_document
 ---

@@ -1,5 +1,5 @@
 ---
-title: "Figure 4: Sensitivity Analysis and Value of Information"
+title: "Figure 5: Sensitivity Analysis and Value of Information"
 author: "Annice Najafi"
 output: html_document
 ---

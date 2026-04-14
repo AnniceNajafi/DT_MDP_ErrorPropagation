@@ -1,5 +1,5 @@
 ---
-title: "Figure 5: POMDP Belief Trajectory Visualization"
+title: "Figure 6: POMDP Belief Trajectory Visualization"
 author: "Annice Najafi"
 output: html_document
 ---

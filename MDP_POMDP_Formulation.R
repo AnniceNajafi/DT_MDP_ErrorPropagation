@@ -12,6 +12,7 @@ library(ggplot2)
 library(reshape2)
 library(expm)
 library(gridExtra)
+library(RMCDA)     #real TOPSIS baseline (companion paper [4])
 
 #Data-driven parameters from physics -> ARX -> HMM pipeline
 source("SimulationPipeline.R")
@@ -249,12 +250,162 @@ gillespie_random <- function(Q_list, R_rate, s0, T_end, r_disc) {
   disc_ret
 }
 
-#Gillespie with MCDA policy (imperfect classification + dwell hysteresis)
-#The agent observes a noisy version of the true state via the confusion
-#matrix and selects actions based on the perceived state. A dwell time
-#hysteresis prevents rapid action switching.
+#Gillespie with real MCDA/TOPSIS policy (companion paper [4]).
+#At each transition event, an EMA posterior over regimes is updated
+#from the noisy observation z. Five criteria (KPI_gain, Module_gain,
+#Drift_gain, Stability, Cost) are computed per repair action from the
+#posterior, and RMCDA::apply.TOPSIS ranks the five repair actions.
+#A gate forces NoAction when the posterior is confidently Nominal and
+#KPI proxy is low. Time-based dwell hysteresis (dwell_sec) prevents
+#rapid switching. Weights, action costs, and stability penalties match
+#MCDA_intervention.R from the companion HMM paper.
+#
+#The mcda_action argument is retained for signature compatibility with
+#legacy callers but is unused; TOPSIS computes actions from criteria.
 gillespie_mcda <- function(Q_list, mcda_action, confusion, dwell_sec,
-                           R_rate, s0, T_end, r_disc) {
+                           R_rate, s0, T_end, r_disc,
+                           alpha_ema = 0.3) {
+  K  <- nrow(Q_list[[1]])
+  sn <- rownames(Q_list[[1]])
+
+  topsis_actions <- c("DwSensorA", "DwSensorB", "IncFilter",
+                      "ReidentPlant", "BiasCorrect")
+  stability_penalty <- c(0.08, 0.08, 0.05, 0.15, 0.12)
+  action_cost       <- c(0.10, 0.10, 0.15, 0.40, 0.25)
+  topsis_weights    <- c(KPI_gain = 0.35, Module_gain = 0.25,
+                         Drift_gain = 0.15, Stability = 0.10, Cost = 0.15)
+
+  cap     <- 2000
+  times   <- numeric(cap)
+  st_seq  <- integer(cap)
+  act_seq <- character(cap)
+  idx     <- 1
+  t_now   <- 0
+  s       <- s0
+
+  posterior <- rep(0, K)
+  z0 <- sample.int(K, 1, prob = confusion[s0, ])
+  posterior[z0] <- 1.0
+
+  current_action   <- "NoAction"
+  last_switch_time <- 0
+
+  times[1]   <- 0
+  st_seq[1]  <- s
+  act_seq[1] <- current_action
+
+  while (t_now < T_end) {
+    a  <- current_action
+    Qa <- Q_list[[a]]
+    ro <- pmax(Qa[s, ], 0); ro[s] <- 0
+    lam <- sum(ro)
+    if (lam <= 0) break
+
+    tau   <- rexp(1, lam)
+    t_now <- t_now + tau
+    if (t_now > T_end) break
+
+    s <- sample.int(K, 1, prob = ro)
+    z <- sample.int(K, 1, prob = confusion[s, ])
+
+    indicator <- rep(0, K); indicator[z] <- 1.0
+    posterior <- alpha_ema * indicator + (1 - alpha_ema) * posterior
+    posterior <- posterior / sum(posterior)
+
+    pN <- posterior[1]; pS <- posterior[2]
+    pD <- posterior[3]; pR <- posterior[4]
+
+    sensor_n <- pS
+    plant_n  <- pD
+    drift_n  <- pR
+    kpi_n    <- 1 - pN
+    noise_n  <- sensor_n
+
+    kpi_gain <- c(
+      pS * kpi_n * sensor_n * 1.2,
+      pS * kpi_n * sensor_n * 0.6,
+      pS * kpi_n * noise_n,
+      pD * kpi_n * plant_n,
+      (pR + 0.5 * pD) * kpi_n * (drift_n + 0.3 * plant_n)
+    )
+    module_gain <- c(
+      pS * sensor_n * 1.2,
+      pS * sensor_n * 0.6,
+      pS * sensor_n * noise_n,
+      pD * plant_n,
+      (pR + 0.5 * pD) * (drift_n + 0.3 * plant_n)
+    )
+    drift_gain <- c(
+      pS * drift_n * 1.1,
+      pS * drift_n * 0.7,
+      pS * drift_n * 0.6,
+      pD * drift_n * 0.4,
+      (pR + 0.2 * pS) * drift_n
+    )
+
+    dm <- cbind(
+      KPI_gain    = kpi_gain,
+      Module_gain = module_gain,
+      Drift_gain  = drift_gain,
+      Stability   = -stability_penalty,
+      Cost        = -action_cost
+    )
+    rownames(dm) <- topsis_actions
+
+    topsis_scores <- suppressWarnings(
+      as.numeric(RMCDA::apply.TOPSIS(dm, w = as.numeric(topsis_weights)))
+    )
+    if (all(is.na(topsis_scores)) || all(topsis_scores == 0)) {
+      desired_action <- "NoAction"
+    } else {
+      desired_action <- topsis_actions[which.max(topsis_scores)]
+    }
+
+    #Gate: confidently Nominal + low KPI proxy => NoAction
+    if (kpi_n < 0.25 && pN > 0.75) {
+      desired_action <- "NoAction"
+    }
+
+    if (desired_action != current_action &&
+        (t_now - last_switch_time) >= dwell_sec) {
+      current_action   <- desired_action
+      last_switch_time <- t_now
+    }
+
+    idx <- idx + 1
+    if (idx > length(times)) {
+      times   <- c(times,   numeric(cap))
+      st_seq  <- c(st_seq,  integer(cap))
+      act_seq <- c(act_seq, character(cap))
+    }
+    times[idx]   <- t_now
+    st_seq[idx]  <- s
+    act_seq[idx] <- current_action
+  }
+
+  times   <- times[1:idx]
+  st_seq  <- st_seq[1:idx]
+  act_seq <- act_seq[1:idx]
+
+  disc_ret <- 0
+  for (i in seq_along(times)) {
+    a_i     <- act_seq[i]
+    c_i     <- R_rate[a_i, st_seq[i]]
+    t_start <- times[i]
+    t_end_i <- if (i < idx) times[i + 1] else T_end
+    dt_seg  <- t_end_i - t_start
+    if (dt_seg > 0 && r_disc > 0)
+      disc_ret <- disc_ret +
+        (c_i / r_disc) * exp(-r_disc * t_start) * (1 - exp(-r_disc * dt_seg))
+  }
+
+  list(times = times, states = st_seq, actions = act_seq, disc_return = disc_ret)
+}
+
+#Legacy shortcut: MDP-optimal policy applied to hard classifications.
+#Retained for ablation purposes only; NOT used by the figure notebooks.
+gillespie_hard_mcda <- function(Q_list, mcda_action, confusion, dwell_sec,
+                                R_rate, s0, T_end, r_disc) {
   K  <- nrow(Q_list[[1]])
   sn <- rownames(Q_list[[1]])
 
@@ -269,7 +420,6 @@ gillespie_mcda <- function(Q_list, mcda_action, confusion, dwell_sec,
   times[1]  <- 0
   st_seq[1] <- s
 
-  #Initial classification
   s_perceived <- sample.int(K, 1, prob = confusion[s, ])
   current_action <- mcda_action[sn[s_perceived]]
   act_seq[1] <- current_action
@@ -288,7 +438,6 @@ gillespie_mcda <- function(Q_list, mcda_action, confusion, dwell_sec,
 
     s <- sample.int(K, 1, prob = ro)
 
-    #Classify and possibly switch action
     s_perceived <- sample.int(K, 1, prob = confusion[s, ])
     desired_action <- mcda_action[sn[s_perceived]]
 
@@ -313,7 +462,6 @@ gillespie_mcda <- function(Q_list, mcda_action, confusion, dwell_sec,
   st_seq  <- st_seq[1:idx]
   act_seq <- act_seq[1:idx]
 
-  #Compute discounted return using actual actions taken
   disc_ret <- 0
   for (i in seq_along(times)) {
     a_i     <- act_seq[i]

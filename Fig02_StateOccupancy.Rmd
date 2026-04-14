@@ -1,5 +1,5 @@
 ---
-title: "Figure 2: State-Occupancy Evolution Under Four Intervention Strategies"
+title: "Figure 3: State-Occupancy Evolution Under Four Intervention Strategies"
 author: "Annice Najafi"
 output: html_document
 ---

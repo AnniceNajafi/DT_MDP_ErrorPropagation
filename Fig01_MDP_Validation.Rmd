@@ -1,5 +1,5 @@
 ---
-title: "Figure 1: MDP Validation and Trajectory Analysis"
+title: "Figure 2: MDP Validation and Trajectory Analysis"
 author: "Annice Najafi"
 output: html_document
 ---

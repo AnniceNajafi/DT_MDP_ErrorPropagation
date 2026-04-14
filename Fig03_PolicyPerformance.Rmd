@@ -1,5 +1,5 @@
 ---
-title: "Figure 3: Policy Performance Comparison"
+title: "Figure 4: Policy Performance Comparison"
 author: "Annice Najafi"
 output: html_document
 ---

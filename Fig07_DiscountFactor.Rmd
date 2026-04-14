@@ -1,5 +1,5 @@
 ---
-title: "Figure 7: Fraction in Nominal Across Discount Factors"
+title: "Figure 8: Fraction in Nominal Across Discount Factors"
 author: "Annice Najafi"
 output: html_document
 ---

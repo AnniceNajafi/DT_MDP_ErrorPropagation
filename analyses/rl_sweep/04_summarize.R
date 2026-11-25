@@ -41,7 +41,7 @@ for (a in unique(p$algo)) {
 }
 # Default-config convergence diagnostic
 cat("\nDefault configs, per seed (last 10% vs preceding 10% training return):\n")
-dd <- p[(p$algo == "QL" & p$delta_key == "0.1" & p$lr == 0.1) |
-        (p$algo == "REINFORCE" & p$lr == 0.001),
+dd <- p[(p$algo == "QL" & p$delta_key == "0.1" & p$lr == 0.01) |
+        (p$algo == "REINFORCE" & p$lr == 1e-4),
         c("algo","lr","episodes","train_seed","train_prev10pct","train_last10pct","train_last_minus_prev","eval_mean_T15")]
 print(dd, digits = 4)

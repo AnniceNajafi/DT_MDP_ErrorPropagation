@@ -1,5 +1,6 @@
 # table5_final.R  (from table4_rerun.R)
-# Changes: k-Step uses k = 1 (selected by the held-out sweep, KStepHeuristic_Summary.csv);
+# Changes: k-Step uses the k selected by the held-out sweep (KStepHeuristic_Summary.csv);
+# all policies are evaluated per sample (R/sim_persample.R);
 # adds Myopic-belief and QMDP rows; stores cumulative-reward curves and per-trajectory
 # fraction in Nominal for Fig. 3 so the figure and Table 5 come from the same trajectories.
 # Regenerates Table 4 (policy summary) and the Wilcoxon / Cliff's delta table
@@ -37,11 +38,11 @@ RE_EPISODES <- nq(10000L, 1000L)
 source(rl_core)
 cat("Training RL agents at default settings...\n")
 ql_agents <- lapply(123L + seq_len(N_AGENTS) - 1L, function(sd) {
-  f <- train_qlearning(delta = 0.1, alpha_ql = 0.1, n_episodes_ql = QL_EPISODES, seed = sd)
+  f <- train_qlearning(delta = 0.1, alpha_ql = 0.01, n_episodes_ql = QL_EPISODES, seed = sd)
   ql_selector(f$Q_table, f$belief_grid)
 })
 re_agents <- lapply(456L + seq_len(N_AGENTS) - 1L, function(sd) {
-  f <- train_reinforce(lr_re = 0.001, n_episodes_re = RE_EPISODES, seed = sd)
+  f <- train_reinforce(lr_re = 1e-4, n_episodes_re = RE_EPISODES, seed = sd)
   re_selector(f$theta)
 })
 
@@ -85,7 +86,7 @@ run_policy <- function(label, sim_fn) {
     set.seed(seed0 + n)
     tr <- sim_fn(n)
     rets[n] <- tr$disc_return
-    curves[n, ] <- cum_reward_at_pts_mcda(tr, t_pts, NULL, c_rate, r_disc)
+    curves[n, ] <- tr$cum
     fracs[n] <- frac_in_nominal(tr, T_end)
     for (g in names(canonical_repair_tbl))
       delays[n, g] <- first_detection_delay(tr, match(g, states), canonical_repair_tbl[g])
@@ -100,21 +101,25 @@ run_policy <- function(label, sim_fn) {
                         MismatchPct = 100 * mean(mism)))
 }
 
+# k-Step threshold: best k of the held-out sweep (analyses/Revision_KStepHeuristicBaseline.R)
+k_file <- out_path("tables", "KStepHeuristic_Summary.csv")
+K_STEP <- if (file.exists(k_file)) { ks <- read.csv(k_file); ks$k[which.max(ks$mean_return)] } else 1L
+cat("k-Step threshold k =", K_STEP, "
+")
+
+# Per-sample evaluation (R/sim_persample.R): every policy sees one decoder
+# label per 20 ms sample; trajectory n of every policy uses set.seed(seed0 + n).
+ps <- function(ctl) function(n) sim_ps(ctl, A, O_mat, s0 = 1L, T_end = T_end, t_pts = t_pts)
 res <- list(
-  run_policy("Optimal MDP", function(n) gillespie_det_wrap(Q_rate, vi$policy, c_rate, 1, T_end, r_disc)),
-  run_policy("POMDP (PBVI)", function(n) gillespie_pomdp(Q_rate, A, pomdp$Gamma, pomdp$actions,
-                                                         O_mat, c_rate, 1, T_end, r_disc)),
-  run_policy("Q-Learning", function(n) gillespie_belief_policy(Q_rate, ql_agents[[(n - 1) %% N_AGENTS + 1]],
-                                                               O_mat, c_rate, 1, T_end, r_disc)),
-  run_policy("REINFORCE", function(n) gillespie_belief_policy(Q_rate, re_agents[[(n - 1) %% N_AGENTS + 1]],
-                                                              O_mat, c_rate, 1, T_end, r_disc)),
-  run_policy("Myopic belief", function(n) gillespie_belief_policy(Q_rate, ch_myo, O_mat, c_rate, 1, T_end, r_disc)),
-  run_policy("QMDP", function(n) gillespie_belief_policy(Q_rate, ch_qmdp, O_mat, c_rate, 1, T_end, r_disc)),
-  run_policy("k-Step (k=1)", function(n) gillespie_kstep(Q_rate, O_mat, c_rate, 1, T_end, r_disc,
-                                                         k_threshold = 1L, dwell_sec = 0.5)),
-  run_policy("MCDA (TOPSIS)", function(n) gillespie_mcda(Q_rate, vi$policy, O_mat, mcda_dwell_time,
-                                                         c_rate, 1, T_end, r_disc)),
-  run_policy("No Intervention", function(n) gillespie_det_wrap(Q_rate, policy_none, c_rate, 1, T_end, r_disc))
+  run_policy("Optimal MDP", ps(ctl_state(vi$policy))),
+  run_policy("POMDP (PBVI)", ps(ctl_belief(alpha_choose(pomdp$Gamma, pomdp$actions)))),
+  run_policy("Q-Learning", function(n) ps(ctl_belief(ql_agents[[(n - 1) %% N_AGENTS + 1]]))(n)),
+  run_policy("REINFORCE", function(n) ps(ctl_belief(re_agents[[(n - 1) %% N_AGENTS + 1]]))(n)),
+  run_policy("Myopic belief", ps(ctl_belief(ch_myo))),
+  run_policy("QMDP", ps(ctl_belief(ch_qmdp))),
+  run_policy(sprintf("k-Step (k=%d)", K_STEP), ps(ctl_kstep(K_STEP, dwell_sec = 0.5))),
+  run_policy("MCDA (TOPSIS)", ps(ctl_mcda(mcda_dwell_time))),
+  run_policy("No Intervention", ps(ctl_state(policy_none)))
 )
 tbl <- do.call(rbind, lapply(res, `[[`, "row"))
 saveRDS(list(t_pts = t_pts, res = res), file.path(out_dir, "table5_runs.rds"))

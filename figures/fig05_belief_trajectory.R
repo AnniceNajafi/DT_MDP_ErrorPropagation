@@ -31,40 +31,13 @@ theme_paper <- theme(
 )
 
 # ---- chunk: belief-tracker ----
-#Gillespie that stores belief vectors at each event
-gillespie_pomdp_beliefs <- function(Q_list, A_list, pomdp_Gamma, pomdp_actions,
-                                     O_mat, R_rate, s0, T_end, r_disc) {
-  K <- nrow(Q_list[[1]]); sn <- rownames(Q_list[[1]])
-  cap <- 2000
-  times <- numeric(cap); st_seq <- integer(cap); obs_seq <- integer(cap)
-  act_seq <- character(cap); bel_mat <- matrix(NA, cap, K)
-  idx <- 1; t_now <- 0; s <- s0
-  b <- rep(0, K); b[s0] <- 1
-  current_action <- pomdp_action(b, pomdp_Gamma, pomdp_actions)
-  times[1] <- 0; st_seq[1] <- s; obs_seq[1] <- s
-  act_seq[1] <- current_action; bel_mat[1,] <- b
-  while (t_now < T_end) {
-    a <- current_action; Qa <- Q_list[[a]]
-    ro <- pmax(Qa[s, ], 0); ro[s] <- 0; lam <- sum(ro)
-    if (lam <= 0) break
-    tau <- rexp(1, lam); t_now <- t_now + tau
-    if (t_now > T_end) break
-    s <- sample.int(K, 1, prob = ro)
-    z <- sample.int(K, 1, prob = O_mat[s, ])
-    A_tau <- expm(Qa * tau)
-    b <- belief_update(b, a, z, A_tau, O_mat)
-    current_action <- pomdp_action(b, pomdp_Gamma, pomdp_actions)
-    idx <- idx + 1
-    if (idx > nrow(bel_mat)) {
-      times <- c(times, numeric(cap)); st_seq <- c(st_seq, integer(cap))
-      obs_seq <- c(obs_seq, integer(cap)); act_seq <- c(act_seq, character(cap))
-      bel_mat <- rbind(bel_mat, matrix(NA, cap, K))
-    }
-    times[idx] <- t_now; st_seq[idx] <- s; obs_seq[idx] <- z
-    act_seq[idx] <- current_action; bel_mat[idx,] <- b
-  }
-  list(times = times[1:idx], states = st_seq[1:idx], obs = obs_seq[1:idx],
-       actions = act_seq[1:idx], beliefs = bel_mat[1:idx, ])
+#Per-sample POMDP trajectory with the belief at every 20 ms sample (R/sim_persample.R)
+pomdp_beliefs_ps <- function(T_end) {
+  tr <- sim_ps(ctl_belief(alpha_choose(pomdp$Gamma, pomdp$actions)), A, O_mat, 1L, T_end,
+               record_belief = TRUE)
+  H <- length(tr$step_states)
+  list(times = (seq_len(H) - 1) * dt, states = tr$step_states,
+       actions = tr$step_actions, beliefs = tr$belief)
 }
 
 # ---- chunk: search-trajectory ----
@@ -72,14 +45,13 @@ gillespie_pomdp_beliefs <- function(Q_list, A_list, pomdp_Gamma, pomdp_actions,
 best_tr <- NULL; best_n <- 0
 for (seed in 1:500) {
   set.seed(seed)
-  tr <- gillespie_pomdp_beliefs(Q_rate, A, pomdp$Gamma, pomdp$actions,
-                                 O_mat, c_rate, 1, 10, r_disc)
+  tr <- pomdp_beliefs_ps(10)
   n_u <- length(unique(tr$states))
   if (n_u > best_n) { best_n <- n_u; best_tr <- tr }
   if (n_u >= 4) break
 }
 print(paste0("Selected seed: ", seed, " with ", best_n, " unique states, ",
-             length(best_tr$times), " events"))
+             length(best_tr$times), " samples"))
 
 # ---- chunk: plot-figure5 ----
 #Panel A: Belief vector evolution
@@ -104,13 +76,13 @@ p5a <- ggplot(bel_long, aes(x = time, y = Belief, colour = State)) +
   theme_paper + theme(legend.position = "right")
 
 p5b <- ggplot(true_df, aes(x = time, y = state, colour = state)) +
-  geom_point(size = 2.5) +
+  geom_point(size = 0.8) +
   scale_colour_manual(values = palette_states, guide = "none") +
   labs(tag = "B", title = "True Hidden State", x = NULL, y = NULL) +
   theme_paper + theme(legend.position = "none")
 
 p5c <- ggplot(act_df, aes(x = time, y = action, colour = action)) +
-  geom_point(size = 2.5) +
+  geom_point(size = 0.8) +
   scale_colour_manual(values = palette_actions, guide = "none") +
   labs(tag = "C", title = "Actions Selected", x = "Time (s)", y = NULL) +
   theme_paper + theme(legend.position = "none")

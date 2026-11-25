@@ -348,7 +348,14 @@ for (seed_offset in 0:(n_mc_seeds - 1L)) {
 
   # Reorder HMM transition matrix to canonical regime order
   hmm_trans_raw <- extract_hmm_transition(fm_i)
-  perm_vec <- as.integer(perm_i)[1:K_pipe]
+  # Map each HMM state to the canonical index of its regime BY NAME
+  # (the columns of tab_i are alphabetical, not canonical).
+  state_regime <- rep(NA_character_, K_pipe)
+  for (hi in 1:K_pipe) {
+    if (as.character(hi) %in% names(map_i)) state_regime[hi] <- map_i[[as.character(hi)]]
+  }
+  perm_vec <- match(state_regime, states_pipeline)
+  perm_vec[is.na(perm_vec)] <- setdiff(seq_len(K_pipe), perm_vec)[seq_len(sum(is.na(perm_vec)))]
   hmm_trans_reordered <- matrix(0, K_pipe, K_pipe)
   for (hi in 1:K_pipe) {
     for (hj in 1:K_pipe) {

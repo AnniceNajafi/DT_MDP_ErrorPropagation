@@ -30,15 +30,14 @@ for (p_sn in p_sn_levels) {
     rews <- numeric(N_sweep)
     for (i in 1:N_sweep) {
       if (pol_name == "Optimal MDP") {
-        tr <- gillespie_mdp(Q_rate, vi$policy, c_rate, 1, T_sweep, r_disc)
+        tr <- sim_ps(ctl_state(vi$policy), A, O_mod, 1L, T_sweep)   # per-sample (R/sim_persample.R)
       } else if (pol_name == "POMDP (PBVI)") {
-        tr <- gillespie_pomdp(Q_rate, A, pomdp_mod$Gamma, pomdp_mod$actions,
-                              O_mod, c_rate, 1, T_sweep, r_disc)
+        tr <- sim_ps(ctl_belief(alpha_choose(pomdp_mod$Gamma, pomdp_mod$actions), A, O_mod),
+                     A, O_mod, 1L, T_sweep)
       } else if (pol_name == "MCDA (TOPSIS)") {
-        tr <- gillespie_mcda(Q_rate, mcda_ideal_action, O_mod, mcda_dwell_time,
-                             c_rate, 1, T_sweep, r_disc)
+        tr <- sim_ps(ctl_mcda(mcda_dwell_time), A, O_mod, 1L, T_sweep)
       } else {
-        tr <- gillespie_mdp(Q_rate, policy_none, c_rate, 1, T_sweep, r_disc)
+        tr <- sim_ps(ctl_state(policy_none), A, O_mod, 1L, T_sweep)
       }
       rews[i] <- tr$disc_return
     }
@@ -89,16 +88,15 @@ for (lam in lambda_levels) {
     rews <- numeric(N_rep)
     for (i in 1:N_rep) {
       if (pol_name == "Optimal MDP") {
-        tr <- gillespie_mdp(Q_new, vi_new$policy, c_rate_new, 1, T_rep, r_disc)
+        tr <- sim_ps(ctl_state(vi_new$policy), A_new, O_mat, 1L, T_rep)
       } else if (pol_name == "POMDP (PBVI)") {
-        tr <- gillespie_pomdp(Q_new, A_new, pomdp_new$Gamma, pomdp_new$actions,
-                              O_mat, c_rate_new, 1, T_rep, r_disc)
+        tr <- sim_ps(ctl_belief(alpha_choose(pomdp_new$Gamma, pomdp_new$actions), A_new, O_mat),
+                     A_new, O_mat, 1L, T_rep)
       } else if (pol_name == "MCDA (TOPSIS)") {
-        tr <- gillespie_mcda(Q_new, vi_new$policy, O_mat, mcda_dwell_time,
-                             c_rate_new, 1, T_rep, r_disc)
+        tr <- sim_ps(ctl_mcda(mcda_dwell_time), A_new, O_mat, 1L, T_rep)
       } else {
         policy_n <- setNames(rep("NoAction", K), states)
-        tr <- gillespie_mdp(Q_new, policy_n, c_rate_new, 1, T_rep, r_disc)
+        tr <- sim_ps(ctl_state(policy_n), A_new, O_mat, 1L, T_rep)
       }
       rews[i] <- tr$disc_return
     }
@@ -145,9 +143,11 @@ p4b <- ggplot(repair_results, aes(lambda, mean_reward, colour = policy, fill = p
 p4c <- ggplot(voi_data, aes(policy, mean_ret, fill = policy)) +
   geom_col(width = 0.6, alpha = 0.9) +
   geom_errorbar(aes(ymin = mean_ret - 1.96 * se, ymax = mean_ret + 1.96 * se), width = 0.15) +
-  geom_text(aes(label = sprintf("%.1f", mean_ret)), vjust = -0.9, size = 4.3, fontface = "bold") +
+  geom_hline(yintercept = 0, linewidth = 0.4) +
+  geom_text(aes(label = sprintf("%.1f", mean_ret), vjust = ifelse(mean_ret >= 0, -0.9, 1.9)), size = 4.3, fontface = "bold") +
   scale_fill_manual(values = palette_policy, guide = "none") +
-  scale_y_continuous(limits = c(0, 110), breaks = seq(0, 100, 25), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(min(0, floor((min(voi_data$mean_ret) - 15) / 25) * 25), 110),
+                     breaks = seq(-100, 100, 25), expand = c(0, 0)) +
   labs(tag = "C", title = "Mean discounted return (Table 5 runs)", x = NULL, y = "Mean discounted return") +
   theme_paper
 p <- ((p4a | p4b) / p4c) + plot_layout(heights = c(1, 0.85), guides = "collect") &

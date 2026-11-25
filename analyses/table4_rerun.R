@@ -36,11 +36,11 @@ RE_EPISODES <- nq(10000L, 1000L)
 source(rl_core)
 cat("Training RL agents at default settings...\n")
 ql_agents <- lapply(123L + seq_len(N_AGENTS) - 1L, function(sd) {
-  f <- train_qlearning(delta = 0.1, alpha_ql = 0.1, n_episodes_ql = QL_EPISODES, seed = sd)
+  f <- train_qlearning(delta = 0.1, alpha_ql = 0.01, n_episodes_ql = QL_EPISODES, seed = sd)
   ql_selector(f$Q_table, f$belief_grid)
 })
 re_agents <- lapply(456L + seq_len(N_AGENTS) - 1L, function(sd) {
-  f <- train_reinforce(lr_re = 0.001, n_episodes_re = RE_EPISODES, seed = sd)
+  f <- train_reinforce(lr_re = 1e-4, n_episodes_re = RE_EPISODES, seed = sd)
   re_selector(f$theta)
 })
 

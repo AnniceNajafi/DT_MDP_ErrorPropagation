@@ -76,6 +76,7 @@ analyses/                 tables and revision analyses (write to output/tables, 
   Revision_PBVI_Convergence.R, Revision_KStepHeuristicBaseline.R,
   Revision_ComputationalCost.R, Revision_RewardSensitivity.R
   table5_final.R          policy summary table + Wilcoxon / Cliff's delta tests
+  state_diagnostics.R     occupancy over time; where the POMDP's action mismatches occur
   revision_analyses.R     CT-approximation error, PBVI initialisation, myopic/QMDP,
                           held-out causal O, misspecified/correlated observations,
                           TEP policy evaluation, slow repairs

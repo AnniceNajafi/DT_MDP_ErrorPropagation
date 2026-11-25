@@ -74,25 +74,33 @@ dfA <- readRDS(out_path("analyses", "Revision_Sensitivity_dfA.rds"))
 dfB <- readRDS(out_path("analyses", "Revision_Sensitivity_dfB.rds"))
 dfC <- readRDS(out_path("analyses", "Revision_Sensitivity_dfC.rds"))
 
+# k-Step label follows the k selected by the k-Step sweep (e.g. "k-Step (k=2)")
+k_lab <- grep("^k-Step", unique(as.character(dfA$policy)), value = TRUE)[1]
+names(palette_policy)[grep("^k-Step", names(palette_policy))] <- k_lab
 pol_levels <- names(palette_policy)
 dfA$policy <- factor(dfA$policy, levels = pol_levels)
 dfB$policy <- factor(dfB$policy, levels = pol_levels)
 dfC$policy <- factor(dfC$policy, levels = pol_levels)
 
+# 95% confidence half-widths: A, B over the trajectories of each run (N = 200);
+# C over the replicate means (n_rep = 20 replicates of 100 trajectories each).
+N_AB <- 200
+dfA$ci <- 1.96 * dfA$sd / sqrt(N_AB); dfB$ci <- 1.96 * dfB$sd / sqrt(N_AB)
 dfC_agg <- aggregate(mean ~ policy + level, data = dfC, FUN = mean)
 dfC_sd  <- aggregate(mean ~ policy + level, data = dfC, FUN = sd)
-dfC_agg$sd <- dfC_sd$mean
+dfC_n   <- aggregate(mean ~ policy + level, data = dfC, FUN = length)
+dfC_agg$ci <- 1.96 * dfC_sd$mean / sqrt(dfC_n$mean)
 dfC_agg$policy <- factor(dfC_agg$policy, levels = pol_levels)
 
 plot_panel <- function(df, xlab, tag, title) {
   ggplot(df, aes(level, mean, fill = policy)) +
     geom_col(position = position_dodge(0.8), width = 0.7,
              colour = "black", linewidth = 0.25) +
-    geom_errorbar(aes(ymin = pmax(mean - sd, 0), ymax = mean + sd),
+    geom_hline(yintercept = 0, linewidth = 0.3) +
+    geom_errorbar(aes(ymin = mean - ci, ymax = mean + ci),
                   position = position_dodge(0.8), width = 0.2,
                   colour = "black") +
     scale_fill_manual(values = palette_policy) +
-    coord_cartesian(ylim = c(0, NA)) +
     labs(x = xlab, y = "Mean discounted return",
          title = title, tag = tag) +
     theme_minimal(base_size = 14) + theme_paper +

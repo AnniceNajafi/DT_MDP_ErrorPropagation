@@ -129,20 +129,26 @@ cat(sprintf("VoI bracket (discrete-time values): [%.3f, %.3f]\n", Vm-UB, Vm-LB))
 bu <- rep(.25,4); cat(sprintf("b=uniform: V_MDP(b)=%.3f FIB=%.3f LB=%.3f\n", sum(vi$V*bu), max(Qfib%*%bu), val_b(bu,P_lb)))
 
 # ---------------------------------------------------------------- Gillespie POMDP with pluggable obs model
+# Per-sample evaluation (as R/sim_persample.R): one decoder label per 20 ms
+# sample, Bayesian belief update with the per-step kernels A^(a) and O_belief;
+# return = sum_k gamma^k R(a_k, s_k). Ql is a list of generators
+# Q = (A - I)/dt, converted back to per-step kernels A = I + Q dt.
+# kappa: probability that an erroneous label of the previous sample repeats
+# (correlated decoder errors).
 gill <- function(Ql, chooser, O_true, O_belief, s0, T_end, kappa = 0, seed) {
-  set.seed(seed); s <- s0; b <- rep(0,K); b[s0] <- 1; a <- chooser(b); t <- 0
-  tt <- 0; ss <- s; aa <- a; prev_err <- NA
-  repeat { ro <- pmax(Ql[[a]][s,],0); ro[s] <- 0; lam <- sum(ro); if (lam <= 0) break
-    tau <- rexp(1, lam); t <- t + tau; if (t > T_end) break
-    s <- sample.int(K, 1, prob = ro)
-    if (!is.na(prev_err) && runif(1) < kappa && prev_err != s) z <- prev_err else z <- sample.int(K, 1, prob = O_true[s,])
+  set.seed(seed); Al <- lapply(Ql, function(Q) diag(K) + Q * dt)
+  H <- as.integer(round(T_end / dt)); s <- s0; b <- rep(0, K); b[s0] <- 1
+  ret <- 0; disc <- 1; fn <- 0; mm <- 0; prev_err <- NA
+  for (k in seq_len(H)) {
+    a <- chooser(b)
+    ret <- ret + disc * R_mat[a, s]; disc <- disc * gamma_disc
+    fn <- fn + (s == 1); mm <- mm + (a != vi$policy[s])
+    s <- sample.int(K, 1, prob = Al[[a]][s, ])
+    if (!is.na(prev_err) && runif(1) < kappa && prev_err != s) z <- prev_err else z <- sample.int(K, 1, prob = O_true[s, ])
     prev_err <- if (z != s) z else NA
-    bp <- as.numeric(b %*% expm(Ql[[a]]*tau)) * O_belief[, z]; b <- if (sum(bp) > 0) bp/sum(bp) else rep(1/K,K)
-    a <- chooser(b); tt <- c(tt,t); ss <- c(ss,s); aa <- c(aa,a) }
-  te <- c(tt[-1], T_end); d <- te - tt
-  ret <- sum(c_rate[cbind(match(aa, actions), ss)] / r_disc * exp(-r_disc*tt) * (1-exp(-r_disc*d)))
-  fn <- sum(d[ss == 1])/T_end; mm <- sum(d[aa != vi$policy[ss]])/T_end
-  c(ret = ret, fnom = fn, mism = mm) }
+    bp <- as.numeric(b %*% Al[[a]]) * O_belief[, z]; b <- if (sum(bp) > 0) bp / sum(bp) else rep(1 / K, K)
+  }
+  c(ret = ret, fnom = fn / H, mism = mm / H) }
 run <- function(chooser, N = N1000, Ql = Q_rate, O_true = O_mat, O_bel = O_mat, kappa = 0) {
   r <- t(sapply(1:N, function(n) gill(Ql, chooser, O_true, O_bel, 1, 20, kappa, 5000+n)))
   c(mean = mean(r[,1]), sd = sd(r[,1]), fnom = mean(r[,2]), mism = 100*mean(r[,3])) }
@@ -162,10 +168,9 @@ print(round(res, 3))
 res_mdp <- run(function(b) vi$policy[which.max(b)], O_true = diag(K), O_bel = diag(K))
 cat("MDP (perfect obs):", round(res_mdp, 3), "\n")
 
-cat("\n==== 4. Exact-log generator: ranking check ====\n")
-res_exact <- rbind(MDP = run(function(b) vi$policy[which.max(b)], Ql = Q_exact, O_true = diag(K), O_bel = diag(K)),
-  POMDP = run(ch_warm, Ql = Q_exact), Myopic = run(ch_myo, Ql = Q_exact), NoAction = run(function(b) "NoAction", Ql = Q_exact))
-print(round(res_exact, 3))
+# Section 4 (exact-log generator ranking check) applied to the event-driven
+# simulator; per-sample evaluation uses the per-step kernels A^(a) directly,
+# so the continuous-time embedding enters only the CT checks of section 1.
 
 # ---------------------------------------------------------------- 5. causal HMM on held-out seeds
 cat("\n==== 5. Causal (forward-filter) HMM on held-out residual sequences ====\n")

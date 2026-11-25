@@ -12,14 +12,14 @@ N_SEEDS <- nq(5L, 1L)
 
 # Full factorial design of the paper (130 runs); quick mode trains only the
 # default configurations with reduced budgets.
-ql_grid <- if (QUICK) expand.grid(delta = 0.1, lr = 0.1, episodes = 500, rep = 1:N_SEEDS) else
-  expand.grid(delta = c(0.2, 0.1, 0.05), lr = c(0.05, 0.1, 0.2),
+ql_grid <- if (QUICK) expand.grid(delta = 0.1, lr = 0.01, episodes = 500, rep = 1:N_SEEDS) else
+  expand.grid(delta = c(0.2, 0.1, 0.05), lr = c(0.005, 0.01, 0.02),
               episodes = c(5000, 20000), rep = 1:N_SEEDS)
 ql_tasks <- lapply(seq_len(nrow(ql_grid)), function(i)
   list(algo = "QL", delta = ql_grid$delta[i], lr = ql_grid$lr[i],
        episodes = ql_grid$episodes[i], seed = 122 + ql_grid$rep[i], rep = ql_grid$rep[i]))
-re_grid <- if (QUICK) expand.grid(lr = 0.001, episodes = 1000, rep = 1:N_SEEDS) else
-  expand.grid(lr = c(0.0005, 0.001, 0.002, 0.005),
+re_grid <- if (QUICK) expand.grid(lr = 1e-4, episodes = 1000, rep = 1:N_SEEDS) else
+  expand.grid(lr = c(1e-5, 3e-5, 1e-4, 3e-4),
               episodes = c(10000, 30000), rep = 1:N_SEEDS)
 re_tasks <- lapply(seq_len(nrow(re_grid)), function(i)
   list(algo = "REINFORCE", delta = NA, lr = re_grid$lr[i],
@@ -30,6 +30,7 @@ cat("Total training runs:", length(tasks), "\n")
 
 worker_init <- function(out_dir, rl_core) {
   mo <- readRDS(file.path(out_dir, "model_objects.rds")); list2env(mo, globalenv())
+  source(file.path(dirname(rl_core), "sim_persample.R"))  # sim_ps, ctl_belief
   source(rl_core)
   NULL
 }
@@ -128,8 +129,8 @@ write.csv(long, file.path(out_dir, "eval_returns_per_trajectory_T15.csv"), row.n
 
 # Learning curves (moving average, window 200) for default configurations
 ma <- function(x, w = 200) as.numeric(stats::filter(x, rep(1 / w, w), sides = 1))
-is_default <- function(r) (r$algo == "QL" && r$delta == 0.1 && r$lr == 0.1) ||
-                          (r$algo == "REINFORCE" && r$lr == 0.001)
+is_default <- function(r) (r$algo == "QL" && r$delta == 0.1 && r$lr == 0.01) ||
+                          (r$algo == "REINFORCE" && r$lr == 1e-4)
 lc <- do.call(rbind, lapply(Filter(is_default, res), function(r)
   data.frame(algo = r$algo, delta = r$delta, lr = r$lr, episodes = r$episodes,
              train_seed = r$seed, episode = seq_along(r$returns),

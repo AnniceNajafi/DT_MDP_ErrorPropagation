@@ -1,61 +1,39 @@
 # rl_core.R
 # Standalone extraction of the RL environment, Q-learning, REINFORCE and
-# Gillespie evaluation code from the model-free RL notebook
+# evaluation code from the model-free RL notebook
 # (notebooks/ModelFreeRL_Significance.Rmd).
 # Algorithms are identical to the Rmd; only the swept settings
 # (grid delta, learning rate, episodes, training seed) are made arguments.
-# Requires model objects (K, M, actions, Q_rate, c_rate, r_disc, O_mat, ...)
+# Requires model objects (K, M, actions, A, R_mat, gamma_disc, O_mat, ...)
 # in the global environment (from R/POMDPFormulation.R, or loaded from
 # output/rl_sweep/model_objects.rds by the sweep workers).
 
 suppressPackageStartupMessages(library(expm))
 
-# ---------------- RL environment (chunk rl-environment) ----------------
-rl_env_new <- function(s0, T_end) {
+# ---------------- RL environment: per-sample POMDP (dt = 20 ms) ----------------
+# One step = one decoder sample: reward R(a, s), transition s' ~ A^(a)[s, ],
+# label z ~ O[s', ], Bayesian belief update with A^(a) and O (the model PBVI
+# solves; see R/sim_persample.R). An episode of T_end seconds has
+# T_end / dt steps. `reward` is R(a, s); `reward_disc` is gamma^k R(a, s),
+# discounted to the start of the episode.
+rl_env_new <- function(s0, T_end, dt = 0.02) {
   b <- rep(0, K); b[s0] <- 1
-  list(s = s0, b = b, t_now = 0, T_end = T_end, done = FALSE)
+  list(s = s0, b = b, k = 0L, H = as.integer(round(T_end / dt)), done = FALSE)
 }
 
 rl_env_step <- function(env, action_idx) {
   a <- actions[action_idx]
-  Qa <- Q_rate[[a]]
   s <- env$s
-  ro <- pmax(Qa[s, ], 0); ro[s] <- 0
-  lam <- sum(ro)
-  if (lam <= 0 || env$done) {
-    dt_rem <- env$T_end - env$t_now
-    rew <- 0
-    if (dt_rem > 0 && r_disc > 0)
-      rew <- (c_rate[a, s] / r_disc) * exp(-r_disc * env$t_now) *
-             (1 - exp(-r_disc * dt_rem))
-    env$done <- TRUE
-    return(list(env = env, obs = s, reward = rew, done = TRUE))
-  }
-  tau <- rexp(1, lam)
-  if (env$t_now + tau > env$T_end) {
-    dt_rem <- env$T_end - env$t_now
-    rew <- 0
-    if (dt_rem > 0 && r_disc > 0)
-      rew <- (c_rate[a, s] / r_disc) * exp(-r_disc * env$t_now) *
-             (1 - exp(-r_disc * dt_rem))
-    env$t_now <- env$T_end
-    env$done <- TRUE
-    return(list(env = env, obs = s, reward = rew, done = TRUE))
-  }
-  rew <- 0
-  if (tau > 0 && r_disc > 0)
-    rew <- (c_rate[a, s] / r_disc) * exp(-r_disc * env$t_now) *
-           (1 - exp(-r_disc * tau))
-  env$t_now <- env$t_now + tau
-  s_new <- sample.int(K, 1, prob = ro)
-  env$s <- s_new
+  rew <- R_mat[a, s]
+  rew_disc <- gamma_disc^env$k * rew
+  s_new <- sample.int(K, 1, prob = A[[a]][s, ])
   z <- sample.int(K, 1, prob = O_mat[s_new, ])
-  A_tau <- expm(Qa * tau)
-  b_pred <- as.numeric(env$b %*% A_tau)
-  b_new <- b_pred * O_mat[, z]
+  b_new <- as.numeric(env$b %*% A[[a]]) * O_mat[, z]
   b_sum <- sum(b_new)
-  if (b_sum > 0) env$b <- b_new / b_sum else env$b <- rep(1 / K, K)
-  list(env = env, obs = z, reward = rew, done = FALSE)
+  env$b <- if (b_sum > 0) b_new / b_sum else rep(1 / K, K)
+  env$s <- s_new; env$k <- env$k + 1L
+  env$done <- env$k >= env$H
+  list(env = env, obs = z, reward = rew, reward_disc = rew_disc, done = env$done)
 }
 
 # ---------------- Belief grid (chunk belief-grid) ----------------
@@ -83,7 +61,7 @@ nearest_grid <- function(b, grid) {
 }
 
 # ---------------- Q-learning training (chunk qlearning-train) ----------------
-train_qlearning <- function(delta = 0.1, alpha_ql = 0.1, n_episodes_ql = 5000,
+train_qlearning <- function(delta = 0.1, alpha_ql = 0.01, n_episodes_ql = 5000,
                             seed = 123, gamma_ql = 0.99, eps_start = 1.0,
                             eps_end = 0.05, T_rl = 15) {
   belief_grid <- generate_simplex_grid(K, delta = delta)
@@ -103,14 +81,14 @@ train_qlearning <- function(delta = 0.1, alpha_ql = 0.1, n_episodes_ql = 5000,
       step <- rl_env_step(env, a_idx)
       env <- step$env
       r <- step$reward
-      total_return <- total_return + r
+      total_return <- total_return + step$reward_disc
       if (!step$done) {
         g_next <- nearest_grid(env$b, belief_grid)
         td_target <- r + gamma_ql * max(Q_table[g_next, ])
         Q_table[g, a_idx] <- Q_table[g, a_idx] + alpha_ql * (td_target - Q_table[g, a_idx])
         g <- g_next
       } else {
-        Q_table[g, a_idx] <- Q_table[g, a_idx] + alpha_ql * (r - Q_table[g, a_idx])
+        Q_table[g, a_idx] <- Q_table[g, a_idx] + alpha_ql * (r - Q_table[g, a_idx])  # terminal step
       }
     }
     episode_returns_ql[ep] <- total_return
@@ -145,7 +123,7 @@ softmax_log_grad <- function(theta, phi, a_idx) {
   grad
 }
 
-train_reinforce <- function(lr_re = 0.001, n_episodes_re = 10000, seed = 456,
+train_reinforce <- function(lr_re = 1e-4, n_episodes_re = 10000, seed = 456,
                             T_rl_re = 15, baseline_decay = 0.99) {
   set.seed(seed)
   theta_re <- matrix(rnorm(M * n_features, sd = 0.01), nrow = M, ncol = n_features)
@@ -154,25 +132,27 @@ train_reinforce <- function(lr_re = 0.001, n_episodes_re = 10000, seed = 456,
   for (ep in 1:n_episodes_re) {
     s0 <- sample.int(K, 1, prob = c(0.4, 0.2, 0.2, 0.2))
     env <- rl_env_new(s0, T_rl_re)
-    log_grads <- list(); rewards <- numeric(0); step_count <- 0
+    H <- env$H
+    Phi <- matrix(0, H, n_features); P <- matrix(0, H, M); a_taken <- integer(H)
+    rewards <- numeric(H); step_count <- 0
     while (!env$done) {
       phi <- belief_features(env$b)
       probs <- softmax_policy(theta_re, phi)
       a_idx <- sample.int(M, 1, prob = probs)
       step_count <- step_count + 1
-      log_grads[[step_count]] <- softmax_log_grad(theta_re, phi, a_idx)
+      Phi[step_count, ] <- phi; P[step_count, ] <- probs; a_taken[step_count] <- a_idx
       step <- rl_env_step(env, a_idx)
       env <- step$env
-      rewards <- c(rewards, step$reward)
+      rewards[step_count] <- step$reward_disc
     }
-    G <- sum(rewards)
+    n <- step_count
+    G <- sum(rewards[1:n])
     episode_returns_re[ep] <- G
     baseline <- baseline_decay * baseline + (1 - baseline_decay) * G
-    grad_sum <- matrix(0, nrow = M, ncol = n_features)
-    for (t in seq_along(log_grads)) {
-      G_t <- sum(rewards[t:length(rewards)])
-      grad_sum <- grad_sum + (G_t - baseline) * log_grads[[t]]
-    }
+    # sum_t (G_t - baseline) * grad log pi(a_t | b_t), G_t = sum_{j >= t} rewards_j
+    G_t <- rev(cumsum(rev(rewards[1:n])))
+    onehot <- matrix(0, n, M); onehot[cbind(1:n, a_taken[1:n])] <- 1
+    grad_sum <- t((onehot - P[1:n, , drop = FALSE]) * (G_t - baseline)) %*% Phi[1:n, , drop = FALSE]
     theta_re <- theta_re + lr_re * grad_sum
   }
   list(theta = theta_re, returns = episode_returns_re)
@@ -234,12 +214,14 @@ pbvi_selector <- function(Gamma, labels)
     labels[which.max(vals)]
   }
 
-# Evaluate with common random numbers: trajectory n uses set.seed(eval_seed0 + n)
+# Evaluate with common random numbers: trajectory n uses set.seed(eval_seed0 + n).
+# Per-sample evaluation (R/sim_persample.R), identical to the evaluation of
+# PBVI and the other belief policies.
 evaluate_policy <- function(select_action, N_eval = 500, s0 = 1, T_end = 15,
                             eval_seed0 = 900000) {
+  ctl <- ctl_belief(select_action, A, O_mat)
   vapply(1:N_eval, function(n) {
     set.seed(eval_seed0 + n)
-    gillespie_belief_policy(Q_rate, select_action, O_mat, c_rate,
-                            s0, T_end, r_disc)$disc_return
+    sim_ps(ctl, A, O_mat, s0 = s0, T_end = T_end, gamma = gamma_disc, R = R_mat)$disc_return
   }, numeric(1))
 }

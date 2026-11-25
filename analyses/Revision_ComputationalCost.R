@@ -135,7 +135,7 @@ print(mem)
 
 cost_tbl <- data.frame(
   Solver           = c("Optimal MDP (VI)", "POMDP (PBVI)",
-                       "k-Step (k=2)", "MCDA (TOPSIS)", "No Intervention"),
+                       "k-Step", "MCDA (TOPSIS)", "No Intervention"),
   OfflineTime_s    = c(round(t_vi["elapsed"], 3),
                        round(t_pbvi["elapsed"], 3),
                        0.000, 0.000, 0.000),

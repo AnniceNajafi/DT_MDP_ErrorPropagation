@@ -57,13 +57,13 @@ for (pol_name in c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervent
   state_counts <- matrix(0, length(t_bins), K)
   for (i in 1:N_occ) {
     if (pol_name == "Optimal MDP") {
-      tr <- gillespie_mdp(Q_rate, vi$policy, c_rate, 1, 15, r_disc)
+      tr <- sim_ps(ctl_state(vi$policy), A, O_mat, 1L, 15)   # per-sample (R/sim_persample.R)
     } else if (pol_name == "POMDP (PBVI)") {
-      tr <- gillespie_pomdp(Q_rate, A, pomdp$Gamma, pomdp$actions, O_mat, c_rate, 1, 15, r_disc)
+      tr <- sim_ps(ctl_belief(alpha_choose(pomdp$Gamma, pomdp$actions)), A, O_mat, 1L, 15)
     } else if (pol_name == "MCDA (TOPSIS)") {
-      tr <- gillespie_mcda(Q_rate, mcda_ideal_action, O_mat, mcda_dwell_time, c_rate, 1, 15, r_disc)
+      tr <- sim_ps(ctl_mcda(mcda_dwell_time), A, O_mat, 1L, 15)
     } else {
-      tr <- gillespie_mdp(Q_rate, policy_none, c_rate, 1, 15, r_disc)
+      tr <- sim_ps(ctl_state(policy_none), A, O_mat, 1L, 15)
     }
     binned <- bin_trajectory(tr, t_bins, K)
     for (j in seq_along(t_bins)) state_counts[j, binned[j]] <- state_counts[j, binned[j]] + 1
@@ -103,6 +103,8 @@ gamma_results <- data.frame()
 for (gam in gamma_levels) {
   cat("  gamma =", gam, "\n")
   vi_g <- value_iteration(A, R_mat, gam)
+  cat("  MDP policy:", paste(vi_g$policy, collapse = "/"), "
+")
   r_disc_g <- -log(gam) / dt
   c_rate_g <- R_mat / dt
   bp <- generate_belief_points(K, n_random = 80)
@@ -113,15 +115,13 @@ for (gam in gamma_levels) {
     fracs <- numeric(N_gam)
     for (i in 1:N_gam) {
       if (pol_name == "Optimal MDP") {
-        tr <- gillespie_mdp(Q_rate, vi_g$policy, c_rate_g, 1, T_gam, r_disc_g)
+        tr <- sim_ps(ctl_state(vi_g$policy), A, O_mat, 1L, T_gam, gamma = gam)
       } else if (pol_name == "POMDP (PBVI)") {
-        tr <- gillespie_pomdp(Q_rate, A, pomdp_g$Gamma, pomdp_g$actions,
-                              O_mat, c_rate_g, 1, T_gam, r_disc_g)
+        tr <- sim_ps(ctl_belief(alpha_choose(pomdp_g$Gamma, pomdp_g$actions)), A, O_mat, 1L, T_gam, gamma = gam)
       } else if (pol_name == "MCDA (TOPSIS)") {
-        tr <- gillespie_mcda(Q_rate, vi_g$policy, O_mat, mcda_dwell_time,
-                             c_rate_g, 1, T_gam, r_disc_g)
+        tr <- sim_ps(ctl_mcda(mcda_dwell_time), A, O_mat, 1L, T_gam, gamma = gam)
       } else {
-        tr <- gillespie_mdp(Q_rate, policy_n, c_rate_g, 1, T_gam, r_disc_g)
+        tr <- sim_ps(ctl_state(policy_n), A, O_mat, 1L, T_gam, gamma = gam)
       }
       fracs[i] <- safe_frac_in_nominal(tr, T_gam)
     }
@@ -131,6 +131,7 @@ for (gam in gamma_levels) {
       se = sd(fracs, na.rm = TRUE) / sqrt(sum(!is.na(fracs)))))
   }
 }
+write.csv(gamma_results, out_path("tables", "DiscountFactor_Sweep.csv"), row.names = FALSE)
 gamma_results$policy <- factor(gamma_results$policy,
   levels = c("Optimal MDP", "POMDP (PBVI)", "MCDA (TOPSIS)", "No Intervention"))
 

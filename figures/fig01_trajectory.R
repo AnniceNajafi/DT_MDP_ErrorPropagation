@@ -109,7 +109,7 @@ p1c <- ggplot(val_df, aes(x = time, y = reward, colour = source, linetype = sour
                                   "Gillespie MC Mean (N=1000)" = "#355872")) +
   scale_linetype_manual(values = c("Bellman (Analytical)" = "solid",
                                     "Gillespie MC Mean (N=1000)" = "dashed")) +
-  labs(tag = "C", title = "Monte Carlo Validation: Gillespie vs Bellman",
+  labs(tag = "C", title = "Consistency check: Gillespie vs Bellman",
        x = "Time (s)", y = "Cumulative Reward", colour = NULL, linetype = NULL) +
   theme_paper
 

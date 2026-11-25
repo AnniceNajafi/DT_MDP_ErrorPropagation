@@ -333,5 +333,6 @@ for (s in 1:K) {
       "(MDP:", vi$policy[states[s]], ")\n")
 }
 
+source(repo_path("R", "sim_persample.R"), local = globalenv())  # per-sample policy evaluation
 .dtmdp_core_loaded <- TRUE
 cat("\n══ POMDPFormulation complete. ══\n")

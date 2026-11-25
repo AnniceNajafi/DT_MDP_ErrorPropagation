@@ -37,10 +37,10 @@ set.seed(42)
 #  R/BaseMDPFormulation.R.)
 
 # =====================================================================
-# 3. SWEEP k IN {1, 2, 3, 5}
+# 3. SWEEP k IN {1, 2, 3, 5, 10, 25} (k counts decoder samples of 20 ms)
 # =====================================================================
 
-k_values <- c(1L, 2L, 3L, 5L)
+k_values <- c(1L, 2L, 3L, 5L, 10L, 25L)
 N_traj   <- nq(1000, 100)
 T_end    <- 20
 
@@ -56,9 +56,8 @@ for (k_t in k_values) {
   rets  <- numeric(N_traj)
   fracs <- numeric(N_traj)
   for (n in seq_len(N_traj)) {
-    tr <- gillespie_kstep(Q_rate, O_mat, c_rate,
-                          s0 = 1, T_end = T_end, r_disc = r_disc,
-                          k_threshold = k_t, dwell_sec = 0.5)
+    # per-sample evaluation (R/sim_persample.R); seeds separate from Table 5
+    tr <- sim_ps(ctl_kstep(k_t, dwell_sec = 0.5), A, O_mat, s0 = 1L, T_end = T_end)
     rets[n]  <- tr$disc_return
     fracs[n] <- frac_in_nominal(tr, T_end)
   }
@@ -87,7 +86,7 @@ fig <- ggplot(results, aes(factor(k), mean_return)) +
   geom_errorbar(aes(ymin = mean_return - sd_return,
                     ymax = mean_return + sd_return),
                 width = 0.15) +
-  labs(x = "k (consecutive non-Nominal observations)",
+  labs(x = "k (consecutive non-Nominal decoder samples)",
        y = "Mean discounted return",
        title = "k-step consecutive heuristic baseline") +
   theme_minimal(base_size = 13)

@@ -43,7 +43,8 @@ N_mc_AB      <- nq(200, 20)     # trajectories per policy, sweeps A and B
 N_mc_C       <- nq(100, 20)     # trajectories per policy, sweep C
 n_rep        <- nq(20, 2)       # Gaussian replicates per sigma
 pbvi_horizon <- nq(2000, 100)   # PBVI iterations per re-solve (as in the original script)
-k_step       <- 1L              # k-step baseline uses k = 1, as in the policy summary table
+k_file <- out_path("tables", "KStepHeuristic_Summary.csv")   # k of the policy summary table
+k_step <- if (file.exists(k_file)) { ks <- read.csv(k_file); as.integer(ks$k[which.max(ks$mean_return)]) } else 1L
 T_end        <- 20
 
 policy_labels <- c("Optimal MDP", "POMDP (PBVI)", sprintf("k-Step (k=%d)", k_step),
@@ -70,18 +71,14 @@ evaluate_policies <- function(sol, N_mc) {
   rets <- matrix(NA_real_, N_mc, 5)
   for (n in seq_len(N_mc)) {
     s0 <- 1L
-    rets[n, 1] <- gillespie_mdp(Q_rate, sol$vi$policy, sol$c_rate,
-                                s0, T_end, r_disc)$disc_return
-    rets[n, 2] <- gillespie_pomdp(Q_rate, A, sol$pbvi$Gamma, sol$pbvi$actions,
-                                  O_mat, sol$c_rate, s0, T_end, r_disc)$disc_return
-    # (simulation order MDP, POMDP, MCDA, k-Step, NoAction as in the
-    #  original scripts, so the random-number stream is the same)
-    rets[n, 4] <- gillespie_mcda(Q_rate, sol$vi$policy, O_mat, mcda_dwell_time,
-                                 sol$c_rate, s0, T_end, r_disc)$disc_return
-    rets[n, 3] <- gillespie_kstep(Q_rate, O_mat, sol$c_rate, s0, T_end, r_disc,
-                                  k_threshold = k_step, dwell_sec = 0.5)$disc_return
-    rets[n, 5] <- gillespie_mdp(Q_rate, policy_none, sol$c_rate,
-                                s0, T_end, r_disc)$disc_return
+    # per-sample evaluation (R/sim_persample.R) under the perturbed reward
+    Rp <- sol$c_rate * dt
+    rets[n, 1] <- sim_ps(ctl_state(sol$vi$policy), A, O_mat, s0, T_end, R = Rp)$disc_return
+    rets[n, 2] <- sim_ps(ctl_belief(alpha_choose(sol$pbvi$Gamma, sol$pbvi$actions)), A, O_mat,
+                         s0, T_end, R = Rp)$disc_return
+    rets[n, 4] <- sim_ps(ctl_mcda(mcda_dwell_time), A, O_mat, s0, T_end, R = Rp)$disc_return
+    rets[n, 3] <- sim_ps(ctl_kstep(k_step, dwell_sec = 0.5), A, O_mat, s0, T_end, R = Rp)$disc_return
+    rets[n, 5] <- sim_ps(ctl_state(policy_none), A, O_mat, s0, T_end, R = Rp)$disc_return
   }
   data.frame(policy = policy_labels,
              mean   = colMeans(rets),

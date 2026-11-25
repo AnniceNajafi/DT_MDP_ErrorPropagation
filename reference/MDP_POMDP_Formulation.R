@@ -6,6 +6,11 @@
 #This script sources SimulationPipeline.R for data-driven parameters
 #and exports all model objects and functions needed by figure notebooks.
 #
+#Reference copy only: a single-file version of R/SimulationPipeline.R ->
+#R/BaseMDPFormulation.R -> R/POMDPFormulation.R for readers. It is not used
+#by run_all.R; note that it solves PBVI with up to 2000 iterations, whereas
+#the paper (and R/POMDPFormulation.R) use a fixed budget of 500.
+#
 #Authors: Annice Najafi
 
 library(ggplot2)
@@ -15,7 +20,10 @@ library(gridExtra)
 library(RMCDA)     #real TOPSIS baseline (companion paper [4])
 
 #Data-driven parameters from physics -> ARX -> HMM pipeline
-source("SimulationPipeline.R")
+local({ r <- Sys.getenv("DTMDP_ROOT"); if (!nzchar(r)) { r <- getwd()
+  while (!file.exists(file.path(r, "R", "paths.R")) && dirname(r) != r) r <- dirname(r) }
+  source(file.path(r, "R", "paths.R")) })
+source(repo_path("R", "SimulationPipeline.R"))
 #Exports: A_NoAction, mcda_confusion, mcda_accuracy
 
 set.seed(42)

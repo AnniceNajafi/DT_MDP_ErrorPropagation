@@ -6,12 +6,13 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
-knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+# Chunks run from the repository root (the parent of notebooks/, or $DTMDP_ROOT)
+knitr::opts_knit$set(root.dir = normalizePath(Sys.getenv("DTMDP_ROOT", ".."), winslash = "/"))
 ```
 
 ```{r source-formulation}
 #Source the pipeline (BaseMDP -> POMDP)
-source("POMDPFormulation.R")
+source("R/POMDPFormulation.R")
 library(scales)
 
 palette_policy <- c("Optimal MDP" = "#213C51", "POMDP (PBVI)" = "#574964",

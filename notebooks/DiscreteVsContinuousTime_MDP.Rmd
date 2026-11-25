@@ -11,12 +11,13 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
-knitr::opts_knit$set(root.dir = "C:/Users/annic/Documents/ARX_HMM/ErrorPropagation_MDP")
+# Chunks run from the repository root (the parent of notebooks/, or $DTMDP_ROOT)
+knitr::opts_knit$set(root.dir = normalizePath(Sys.getenv("DTMDP_ROOT", ".."), winslash = "/"))
 ```
 
 ```{r source-formulation, results='hide'}
 #Source the pipeline to get all model objects
-source("POMDPFormulation.R")
+source("R/POMDPFormulation.R")
 library(scales)
 ```
 

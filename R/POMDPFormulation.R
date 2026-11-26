@@ -18,8 +18,9 @@
 #' PBVI settings used for the paper (Section 3 / Supplementary S3):
 #' 185 random Dirichlet belief points drawn after set.seed(2024) plus the
 #' 15 structured points, MDP warm start, fixed budget of 500 iterations
-#' (tol = 0.001 is never reached with the data-driven O; the residual
-#' plateaus near 1e-2, see analyses/Revision_PBVI_Convergence.R).
+#' (tol = 0.001 is not reached within 500 iterations with the data-driven O; the
+#' successive difference is 2.2e-3 at iteration 500, see
+#' analyses/Revision_PBVI_Convergence.R and analyses/pbvi_bounds_and_gap.R).
 #'
 #' Authors@R: person("Annice", "Najafi")
 #' ──────────────────────────────────────────────────────────────────────

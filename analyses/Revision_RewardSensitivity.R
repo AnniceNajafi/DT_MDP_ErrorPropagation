@@ -17,7 +17,7 @@
 #'   2. re-solve the MDP by value iteration,
 #'   3. re-solve the POMDP by PBVI (MDP warm start, up to 2000 iterations),
 #'   4. simulate N_mc trajectories (T = 20 s, start in Nominal) for
-#'      MDP, POMDP, k-Step (k = 1), MCDA (TOPSIS) and No Intervention.
+#'      MDP, POMDP, k-Step (k = 2), MCDA (TOPSIS) and No Intervention.
 #'
 #' This file merges the former Revision_RewardSensitivity.R (paper
 #' settings: 200 trajectories for A/B, 100 for C, 20 replicates) and the

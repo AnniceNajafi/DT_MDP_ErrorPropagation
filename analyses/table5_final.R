@@ -3,7 +3,7 @@
 # all policies are evaluated per sample (R/sim_persample.R);
 # adds Myopic-belief and QMDP rows; stores cumulative-reward curves and per-trajectory
 # fraction in Nominal for Fig. 3 so the figure and Table 5 come from the same trajectories.
-# Regenerates Table 4 (policy summary) and the Wilcoxon / Cliff's delta table
+# Regenerates Table 4 (policy summary, tab:policy_summary) and the Wilcoxon / Cliff's delta table
 # with the current code. Uses the original model code unchanged:
 #   R/BaseMDPFormulation.R and R/POMDPFormulation.R (model + PBVI solve),
 #   R/kstep_policy.R (gillespie_kstep), R/rl_core.R (Q-learning, REINFORCE),

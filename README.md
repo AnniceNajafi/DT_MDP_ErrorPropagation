@@ -1,7 +1,7 @@
 # DT_MDP_ErrorPropagation
 
 Code for the paper **"Optimal Sequential Decision-Making for Error Propagation
-Mitigation in Modular Digital Twins"** (Najafi et al.).
+Mitigation in Digital Twins"** (Najafi et al.).
 
 The repository contains the complete pipeline used for the paper:
 
@@ -77,6 +77,8 @@ analyses/                 tables and revision analyses (write to output/tables, 
   Revision_ComputationalCost.R, Revision_RewardSensitivity.R
   table5_final.R          policy summary table + Wilcoxon / Cliff's delta tests
   hmm_bic.R               BIC of the residual HMM for K = 2..7 (Section 4.2)
+  pbvi_bounds_and_gap.R   converged PBVI, value-of-information bracket, and the
+                          MDP-POMDP gap at perfect SensorNoisy accuracy (Sections 4.8, 5.3)
   state_diagnostics.R     occupancy over time; where the POMDP's action mismatches occur
   revision_analyses.R     CT-approximation error, PBVI initialisation, myopic/QMDP,
                           held-out causal O, misspecified/correlated observations,
@@ -144,7 +146,7 @@ R 4.5.1):
 | full | estimated 2–3 h (not timed end to end; see below) |
 
 The data-driven pipeline itself (10 HMM fits) takes about 15 s; one PBVI solve
-(200 belief points, 500 iterations) about 13 s. The full run is dominated by
+(200 belief points, 500 iterations) about 5 s (Supplementary Table S2). The full run is dominated by
 `table5_final.R` (2,000 trajectories for each of nine controllers plus ten RL
 agents, about 3 min on 30 cores), `Revision_RewardSensitivity.R` (66 PBVI
 re-solves of up to 2,000 iterations), `fig04_sensitivity_analysis.R` (27 PBVI
@@ -194,8 +196,10 @@ with the installed ones; `--exact` installs these versions with `remotes`):
 * PBVI uses 200 belief points (4 corners, 6 edge midpoints, 4 face centres, the
   centroid and 185 Dirichlet(1,1,1,1) samples drawn after `set.seed(2024)`),
   an MDP warm start and a fixed budget of 500 iterations. With the data-driven
-  `O` the residual plateaus near `1e-2`, so the budget, not the tolerance,
-  ends the iteration (`analyses/Revision_PBVI_Convergence.R`).
+  `O` the successive difference is 2.2e-3 after 500 iterations, so the budget,
+  not the tolerance, ends the iteration (`analyses/Revision_PBVI_Convergence.R`).
+  `analyses/pbvi_bounds_and_gap.R` runs PBVI to convergence (difference below
+  1e-6) for the value-of-information bracket.
 * All Monte Carlo comparisons start in Nominal with `T = 20 s`; `table5_final.R`
   uses common random numbers (`set.seed(700000 + n)` for trajectory `n` of every
   controller), and the same trajectories feed the statistical tests.
@@ -214,8 +218,7 @@ with the installed ones; `--exact` installs these versions with `remotes`):
   | `FigS3_S6_StateOccupancy_DiscountFactor.Rmd` | Figs. S3, S6 | `regen_figures.R` |
   | `FigS5_BeliefTrajectory.Rmd` | Fig. S5 | `fig05_belief_trajectory.R` |
 
-  `MCDA_Methods_Comparison.Rmd` is an additional check that is not part of the
-  paper: it replaces TOPSIS in the MCDA baseline by SAW, VIKOR and PROMETHEE II
+  `MCDA_Methods_Comparison.Rmd` is the MCDA method check of Section 4.9: it replaces TOPSIS in the MCDA baseline by SAW, VIKOR and PROMETHEE II
   (RMCDA) and simulates each on the Table 5 seeds (needs the `table5` step).
 
   Figures 3, 4, 5, S1 and S4 read saved results, so run `run_all.R` (at least

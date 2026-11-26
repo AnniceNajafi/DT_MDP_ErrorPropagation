@@ -64,6 +64,8 @@ steps <- list(
        "k-step heuristic sweep, k in {1,2,3,5,10,25}"),
   list("table5",      "analyses/table5_final.R",
        "policy summary table + Wilcoxon / Cliff's delta tests"),
+  list("hmm_bic",     "analyses/hmm_bic.R",
+       "BIC of the residual HMM for K = 2..7 (Section 4.2)"),
   list("state_diag",  "analyses/state_diagnostics.R",
        "occupancy over time and POMDP mismatch decomposition (Section 5.4, Supplementary S5.2)"),
   list("comp_cost",   "analyses/Revision_ComputationalCost.R",

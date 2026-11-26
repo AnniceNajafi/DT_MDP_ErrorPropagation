@@ -46,7 +46,7 @@ if (file.exists(dd_file)) {
   diag_synth <- diag(dd$A_NoAction)
 } else {
   acc_synth  <- c(Nominal = 0.942, SensorNoisy = 0.210, DynamicsOff = 0.799, Drift = 0.996)
-  diag_synth <- c(Nominal = 0.997, SensorNoisy = 0.985, DynamicsOff = 0.907, Drift = 0.856)
+  diag_synth <- c(Nominal = 0.907, SensorNoisy = 0.856, DynamicsOff = 0.985, Drift = 0.997)
 }
 
 # -----------------------------------------------------------------------
@@ -108,7 +108,10 @@ saveRDS(list(
   mcda_accuracy  = mcda_accuracy_TEP,
   policy         = vi$policy,
   V_star         = vi$V,
-  V_ct           = V_ct
+  V_ct           = V_ct,
+  pomdp_pure     = setNames(sapply(seq_len(K), function(s) {  # PBVI action at each pure belief
+    b <- rep(0, K); b[s] <- 1; pomdp_action(b, pomdp$Gamma, pomdp$actions) }), states),
+  n_alpha        = length(pomdp$Gamma)
 ), file = out_path("tep", "TEP_results.rds"))
 cat("\nSaved output/tep/TEP_results.rds\n")
 

@@ -1,0 +1,24 @@
+---
+title: "Figure 3: policy performance"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, comment = "")
+# The repository root is the parent of notebooks/ unless DTMDP_ROOT is set.
+root <- normalizePath(Sys.getenv("DTMDP_ROOT", ".."), winslash = "/")
+Sys.setenv(DTMDP_ROOT = root)
+knitr::opts_knit$set(root.dir = root)
+source(file.path(root, "R", "notebook_code.R"))   # script code without cat() and banner comments
+script <- file.path(root, "figures", "fig03_reward_comparison.R")
+```
+
+This notebook reproduces Figure 3 of the paper (`output/figures/fig03_reward_comparison.pdf`).
+
+```{r fig3-script, code = notebook_code(script)}
+```
+
+```{r fig3-show, fig.width = 10, fig.height = 4.6}
+print(p)
+```

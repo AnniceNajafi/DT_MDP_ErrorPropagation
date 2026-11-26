@@ -1,6 +1,6 @@
 #fig05_belief_trajectory.R
 #Supplementary fig:belief_trajectory (POMDP belief trajectory).
-#Extracted from notebooks/Fig05_POMDP_Belief.Rmd (same code and seeds); writes output/figures/fig05_belief_trajectory.pdf.
+#Writes output/figures/fig05_belief_trajectory.pdf; notebooks/FigS5_BeliefTrajectory.Rmd runs this script.
 #Usage (repository root): Rscript figures/fig05_belief_trajectory.R
 
 local({ r <- Sys.getenv("DTMDP_ROOT"); if (!nzchar(r)) { r <- getwd()

@@ -1,0 +1,27 @@
+---
+title: "Figure S2: MDP trajectory and Monte Carlo check"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, comment = "")
+# The repository root is the parent of notebooks/ unless DTMDP_ROOT is set.
+root <- normalizePath(Sys.getenv("DTMDP_ROOT", ".."), winslash = "/")
+Sys.setenv(DTMDP_ROOT = root)
+knitr::opts_knit$set(root.dir = root)
+source(file.path(root, "R", "notebook_code.R"))   # script code without cat() and banner comments
+out_dir <- Sys.getenv("DTMDP_OUT", file.path(root, "output"))
+if (file.exists(file.path(out_dir, "data_driven", "data_driven_matrices.rds")))
+  Sys.setenv(DTMDP_REUSE_MATRICES = "1")
+script <- file.path(root, "figures", "fig01_trajectory.R")
+```
+
+This notebook reproduces Figure S2 of the Supplementary Material (`output/figures/fig01_trajectory.pdf`).
+
+```{r figS2-script, code = notebook_code(script)}
+```
+
+```{r figS2-show, fig.width = 9, fig.height = 9}
+grid.arrange(p1a, p1b, p1c, ncol = 1, heights = c(1.2, 1, 1))
+```

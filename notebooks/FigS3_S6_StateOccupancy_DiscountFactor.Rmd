@@ -1,0 +1,31 @@
+---
+title: "Figures S3 and S6: state occupancy and discount factor"
+author: "Annice Najafi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, comment = "")
+# The repository root is the parent of notebooks/ unless DTMDP_ROOT is set.
+root <- normalizePath(Sys.getenv("DTMDP_ROOT", ".."), winslash = "/")
+Sys.setenv(DTMDP_ROOT = root)
+knitr::opts_knit$set(root.dir = root)
+source(file.path(root, "R", "notebook_code.R"))   # script code without cat() and banner comments
+out_dir <- Sys.getenv("DTMDP_OUT", file.path(root, "output"))
+if (file.exists(file.path(out_dir, "data_driven", "data_driven_matrices.rds")))
+  Sys.setenv(DTMDP_REUSE_MATRICES = "1")
+script <- file.path(root, "figures", "regen_figures.R")
+```
+
+This notebook reproduces Figures S3 and S6 of the Supplementary Material (`output/figures/fig02_state_occupancy.pdf` and `output/figures/fig07_discount_factor.pdf`).
+
+```{r figS3-S6-script, code = notebook_code(script)}
+```
+
+```{r figS3-show, fig.width = 10, fig.height = 8}
+print(p_fig02)
+```
+
+```{r figS6-show, fig.width = 9, fig.height = 5.5}
+print(p_fig07)
+```

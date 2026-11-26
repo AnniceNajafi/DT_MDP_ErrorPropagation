@@ -1,0 +1,261 @@
+---
+title: "TOPSIS and other MCDA methods as the decision layer"
+author: "Annice Najafi"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, comment = "")
+# The repository root is the parent of notebooks/ unless DTMDP_ROOT is set.
+root <- normalizePath(Sys.getenv("DTMDP_ROOT", ".."), winslash = "/")
+Sys.setenv(DTMDP_ROOT = root)
+knitr::opts_knit$set(root.dir = root)
+out_dir <- Sys.getenv("DTMDP_OUT", file.path(root, "output"))
+if (file.exists(file.path(out_dir, "data_driven", "data_driven_matrices.rds")))
+  Sys.setenv(DTMDP_REUSE_MATRICES = "1")
+```
+
+# Purpose
+
+The MCDA baseline of the paper (Section 4.9) ranks the five corrective actions with TOPSIS,
+the decision rule of the companion HMM pipeline. A reader may ask whether the gap between
+this baseline and the POMDP is specific to TOPSIS. This notebook keeps everything else in the
+MCDA controller fixed (the five criteria and their weights, the exponential smoothing of the
+decoder labels, the Nominal override and the 0.5 s dwell time) and replaces only the
+ranking method with three widely used methods from the RMCDA package, each from a different
+family (additive weighting, compromise ranking and outranking):
+
+| Method | RMCDA function | Score used (higher = better) |
+|---|---|---|
+| TOPSIS (paper) | `apply.TOPSIS` | closeness to the ideal solution |
+| SAW (simple additive weighting) | `apply.SAW` | weighted sum of the normalised criteria |
+| VIKOR | `apply.VIKOR` | $-Q_i$ (VIKOR ranks by smallest $Q_i$, with $\nu = 0.5$) |
+| PROMETHEE II | `apply.PROMETHEE` | net outranking flow |
+
+All controllers are evaluated with the per-sample simulator of the paper
+(`R/sim_persample.R`): trajectories of 20 s start in Nominal, and trajectory $n$ of every
+method uses `set.seed(700000 + n)`, the seeds of Table 5. The methods therefore face the same
+random numbers, and their returns can be compared pairwise.
+
+```{r load}
+source(file.path(root, "R", "paths.R"))
+suppressPackageStartupMessages({ load_core(); library(RMCDA); library(ggplot2); library(scales) })
+```
+
+# Decision matrix
+
+The criteria are those of `mcda_topsis_action()` in `R/sim_persample.R` (Supplementary
+Section S5.6). Three benefit criteria depend on the smoothed label distribution
+$\hat p = (\hat p_N, \hat p_S, \hat p_D, \hat p_R)$; the stability penalty and the action cost
+are fixed per action. The paper's TOPSIS call treats every column as a benefit and enters the
+two costs as negative numbers. VIKOR and PROMETHEE in RMCDA make the same assumption, so they
+receive the same matrix. SAW takes the costs as positive numbers together with
+`beneficial.vector = 1:3`.
+
+```{r criteria}
+mcda_actions <- c("DwSensorA", "DwSensorB", "IncFilter", "ReidentPlant", "BiasCorrect")
+stability_penalty <- c(0.08, 0.08, 0.05, 0.15, 0.12)
+action_cost       <- c(0.10, 0.10, 0.15, 0.40, 0.25)
+mcda_weights      <- c(0.35, 0.25, 0.15, 0.10, 0.15)
+
+benefit_criteria <- function(p) {
+  pN <- p[1]; pS <- p[2]; pD <- p[3]; pR <- p[4]
+  sensor_n <- pS; plant_n <- pD; drift_n <- pR; kpi_n <- 1 - pN; noise_n <- sensor_n
+  cbind(KPI_gain = c(pS * kpi_n * sensor_n * 1.2, pS * kpi_n * sensor_n * 0.6,
+                     pS * kpi_n * noise_n, pD * kpi_n * plant_n,
+                     (pR + 0.5 * pD) * kpi_n * (drift_n + 0.3 * plant_n)),
+        Module_gain = c(pS * sensor_n * 1.2, pS * sensor_n * 0.6, pS * sensor_n * noise_n,
+                        pD * plant_n, (pR + 0.5 * pD) * (drift_n + 0.3 * plant_n)),
+        Drift_gain = c(pS * drift_n * 1.1, pS * drift_n * 0.7, pS * drift_n * 0.6,
+                       pD * drift_n * 0.4, (pR + 0.2 * pS) * drift_n))
+}
+dm_negcost <- function(p) {   # costs as negative benefits (TOPSIS, VIKOR, PROMETHEE)
+  m <- cbind(benefit_criteria(p), Stability = -stability_penalty, Cost = -action_cost)
+  rownames(m) <- mcda_actions; m
+}
+dm_poscost <- function(p) {   # costs as positive values, with beneficial.vector = 1:3
+  m <- cbind(benefit_criteria(p), Stability = stability_penalty, Cost = action_cost)
+  rownames(m) <- mcda_actions; m
+}
+
+w <- mcda_weights
+scorers <- list(
+  "TOPSIS"       = function(p) as.numeric(apply.TOPSIS(dm_negcost(p), w = w)),
+  "SAW"          = function(p) as.numeric(apply.SAW(dm_poscost(p), w, 1:3)[[1]]),
+  "VIKOR"        = function(p) -as.numeric(apply.VIKOR(dm_negcost(p), w)[[2]][mcda_actions]),
+  "PROMETHEE II" = function(p) as.numeric(apply.PROMETHEE(dm_negcost(p), w)[[3]])
+)
+```
+
+Each score is turned into an action in the same way as in the paper's controller. If the
+scores are undefined, the controller applies NoAction. This happens with every method when a
+benefit column is zero for all five actions, for example before the first Drift label has
+been decoded, because each method normalises the columns. If the smoothed probability of
+Nominal exceeds 0.75, the controller also applies NoAction.
+
+```{r action}
+mcda_action_with <- function(scorer) function(p) {
+  sc <- tryCatch(suppressWarnings(scorer(p)), error = function(e) rep(NA_real_, 5))
+  desired <- if (all(!is.finite(sc))) "NoAction" else mcda_actions[which.max(sc)]
+  if ((1 - p[1]) < 0.25 && p[1] > 0.75) desired <- "NoAction"
+  desired
+}
+```
+
+As a check, the TOPSIS version reproduces `mcda_topsis_action()` of the paper on 5,000 random
+label distributions:
+
+```{r check-topsis}
+set.seed(1)
+P <- matrix(rexp(4 * 5000), ncol = 4); P <- P / rowSums(P)
+P[sample(5000, 1000), 4] <- 0; P <- P / rowSums(P)   # include distributions without Drift mass
+topsis_act <- mcda_action_with(scorers[["TOPSIS"]])
+all(apply(P, 1, topsis_act) == apply(P, 1, mcda_topsis_action))
+```
+
+How often does each method choose the same action as TOPSIS on these distributions?
+
+```{r agreement}
+acts <- sapply(names(scorers), function(m) apply(P, 1, mcda_action_with(scorers[[m]])))
+round(colMeans(acts == acts[, "TOPSIS"]), 3)
+```
+
+# Closed-loop comparison
+
+The controller below is `ctl_mcda()` of `R/sim_persample.R` with the ranking step passed in.
+The simulation of the four methods takes several minutes; the results are cached in
+`output/analyses/mcda_methods_runs.rds`. Delete that file to re-run them.
+
+```{r controller}
+ctl_mcda_with <- function(choose, dwell_sec = mcda_dwell_time, alpha_ema = 0.3) {
+  list(init = function(s0, O_true) {
+         e <- new.env(); e$p <- numeric(K)
+         e$p[sample.int(K, 1L, prob = O_true[s0, ])] <- 1
+         e$a <- "NoAction"; e$t_sw <- 0; e
+       },
+       act = function(st, s) st$a,
+       update = function(st, a, z, t) {
+         ind <- numeric(K); ind[z] <- 1
+         st$p <- alpha_ema * ind + (1 - alpha_ema) * st$p; st$p <- st$p / sum(st$p)
+         want <- choose(st$p)
+         if (want != st$a && (t - st$t_sw) >= dwell_sec - 1e-9) { st$a <- want; st$t_sw <- t }
+         st
+       })
+}
+
+mismatch_rate <- function(tr, mdp_policy, T_end) {   # as in analyses/table5_final.R
+  n <- length(tr$times); wrong <- 0
+  for (i in seq_len(n - 1))
+    if (tr$actions[i] != mdp_policy[states[tr$states[i]]]) wrong <- wrong + (tr$times[i + 1] - tr$times[i])
+  if (tr$actions[n] != mdp_policy[states[tr$states[n]]]) wrong <- wrong + (T_end - tr$times[n])
+  wrong / T_end
+}
+```
+
+```{r simulate}
+N <- nq(500, 50); T_end <- 20; seed0 <- 700000
+cache <- out_path("analyses", "mcda_methods_runs.rds")
+if (file.exists(cache) && identical(readRDS(cache)$N, N)) {
+  runs <- readRDS(cache)$runs
+} else {
+  runs <- lapply(names(scorers), function(m) {
+    ctl <- ctl_mcda_with(mcda_action_with(scorers[[m]]))
+    r <- t(sapply(seq_len(N), function(n) {
+      set.seed(seed0 + n)
+      tr <- sim_ps(ctl, A, O_mat, s0 = 1L, T_end = T_end)
+      c(ret = tr$disc_return, frac = frac_in_nominal(tr, T_end),
+        mism = mismatch_rate(tr, vi$policy, T_end))
+    }))
+    data.frame(method = m, n = seq_len(N), r)
+  })
+  names(runs) <- names(scorers)
+  saveRDS(list(N = N, runs = runs), cache)
+}
+```
+
+The TOPSIS runs use the seeds of Table 5, so their returns must equal the first `r N` MCDA
+returns of `analyses/table5_final.R`:
+
+```{r check-table5}
+t5 <- out_path("table5_final", "returns_per_trajectory.csv")
+if (file.exists(t5)) {
+  ref <- read.csv(t5, check.names = FALSE)[["MCDA (TOPSIS)"]][seq_len(N)]
+  isTRUE(all.equal(runs[["TOPSIS"]]$ret, ref))
+} else "Table 5 output not found (run Rscript run_all.R --only=table5)"
+```
+
+# Results
+
+```{r summary}
+summ <- do.call(rbind, lapply(runs, function(d) data.frame(
+  Method = d$method[1], MeanReturn = mean(d$ret), SE = sd(d$ret) / sqrt(nrow(d)),
+  FracNominal = mean(d$frac), MismatchPct = 100 * mean(d$mism))))
+diffs <- do.call(rbind, lapply(names(runs), function(m) {
+  d <- runs[[m]]$ret - runs[["TOPSIS"]]$ret
+  p <- if (m == "TOPSIS" || all(d == 0)) NA_real_ else
+    suppressWarnings(wilcox.test(d, mu = 0, exact = FALSE)$p.value)
+  data.frame(Method = m, DiffVsTOPSIS = mean(d), DiffSE = sd(d) / sqrt(length(d)), Wilcoxon_p = p)
+}))
+summ <- merge(summ, diffs, by = "Method")
+summ <- summ[order(-summ$MeanReturn), ]
+summ$Wilcoxon_p_Holm <- p.adjust(summ$Wilcoxon_p, method = "holm")
+knitr::kable(summ, digits = c(0, 1, 2, 3, 1, 1, 2, 4, 4), row.names = FALSE,
+             caption = sprintf("Mean discounted return over %d trajectories of 20 s. DiffVsTOPSIS: mean paired difference in return from TOPSIS (same seeds); Wilcoxon signed-rank p-values, Holm-adjusted over the three comparisons.", N))
+```
+
+For reference, the other policies of Table 5 (2,000 trajectories each):
+
+```{r reference}
+tb_file <- out_path("table5_final", "PolicySummaryTable.csv")
+ref_pol <- c("Optimal MDP", "POMDP (PBVI)", "Myopic belief", "MCDA (TOPSIS)", "No Intervention")
+tb <- if (file.exists(tb_file)) read.csv(tb_file) else NULL
+if (!is.null(tb)) knitr::kable(tb[tb$Policy %in% ref_pol, c("Policy", "MeanReward", "SEReward", "FracNominal", "MismatchPct")],
+                               digits = c(0, 1, 2, 3, 1), row.names = FALSE)
+```
+
+```{r plot, fig.width = 8, fig.height = 4.6}
+summ$Method <- factor(summ$Method, levels = rev(summ$Method))
+p <- ggplot(summ, aes(MeanReturn, Method)) +
+  geom_errorbarh(aes(xmin = MeanReturn - 1.96 * SE, xmax = MeanReturn + 1.96 * SE),
+                 height = 0.2, colour = "#5A7863") +
+  geom_point(size = 2.6, colour = "#5A7863") +
+  labs(x = "Mean discounted return (95% CI)", y = NULL,
+       title = "MCDA decision layer with different ranking methods") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        plot.title = element_text(hjust = 0.5, size = 14),
+        axis.text = element_text(size = 11.5, colour = "black"), axis.title = element_text(size = 12.5))
+if (!is.null(tb)) {
+  refs <- tb[tb$Policy %in% c("Optimal MDP", "POMDP (PBVI)", "No Intervention"), ]
+  p <- p + geom_vline(data = refs, aes(xintercept = MeanReward), linetype = "dashed",
+                      colour = c("#213C51", "#574964", "darkred")[match(refs$Policy,
+                               c("Optimal MDP", "POMDP (PBVI)", "No Intervention"))]) +
+    geom_text(data = refs, aes(x = MeanReward, y = 0.45, label = Policy), inherit.aes = FALSE,
+              angle = 90, hjust = 0, vjust = -0.4, size = 3.3)
+}
+p
+```
+
+# Reading the results
+
+The table and the plot answer one question: does any of these ranking rules, given the same
+smoothed labels, criteria and weights, close the gap to the POMDP? All of them score each
+decision epoch on its own and ignore the regime dynamics and the reliability of the decoder,
+so differences between them come only from how they aggregate the five criteria. The paired
+differences show whether a method differs from TOPSIS by more than the Monte Carlo noise, and
+the dashed lines place every method relative to the POMDP, the MDP and No Intervention.
+
+In this run the mean returns of the four methods lie between
+`r sprintf("%.1f", min(summ$MeanReturn))` and `r sprintf("%.1f", max(summ$MeanReturn))`,
+none of the three alternatives differs from TOPSIS at the 5% level after the Holm adjustment
+(smallest adjusted p-value `r sprintf("%.2f", min(summ$Wilcoxon_p_Holm, na.rm = TRUE))`), and
+all of them remain far below the POMDP. Although the methods pick a different action from
+TOPSIS on some label distributions, in closed loop they lead to almost the same behaviour. The
+gap reported in the paper therefore reflects the per-epoch, label-driven design of the MCDA
+controller, and the choice of TOPSIS within that design has little effect on it.
+
+```{r session}
+sessionInfo()
+```

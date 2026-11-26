@@ -1,9 +1,10 @@
 # rl_core.R
-# Standalone extraction of the RL environment, Q-learning, REINFORCE and
-# evaluation code from the model-free RL notebook
-# (notebooks/ModelFreeRL_Significance.Rmd).
-# Algorithms are identical to the Rmd; only the swept settings
-# (grid delta, learning rate, episodes, training seed) are made arguments.
+# RL environment, Q-learning, REINFORCE and evaluation code behind the RL
+# results of the paper (analyses/rl_sweep/). It started as an extraction from
+# the original-submission notebook
+# (notebooks/original_submission/ModelFreeRL_Significance.Rmd); the environment
+# is now the per-sample POMDP below, and the swept settings (grid delta,
+# learning rate, episodes, training seed) are arguments.
 # Requires model objects (K, M, actions, A, R_mat, gamma_disc, O_mat, ...)
 # in the global environment (from R/POMDPFormulation.R, or loaded from
 # output/rl_sweep/model_objects.rds by the sweep workers).

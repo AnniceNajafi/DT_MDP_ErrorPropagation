@@ -1,6 +1,6 @@
 #fig01_trajectory.R
 #Supplementary fig:trajectory (MDP validation and trajectory analysis).
-#Extracted from notebooks/Fig01_MDP_Validation.Rmd (same code and seeds); writes output/figures/fig01_trajectory.pdf.
+#Writes output/figures/fig01_trajectory.pdf; notebooks/FigS2_MDP_Validation.Rmd runs this script.
 #Usage (repository root): Rscript figures/fig01_trajectory.R
 
 local({ r <- Sys.getenv("DTMDP_ROOT"); if (!nzchar(r)) { r <- getwd()

@@ -26,8 +26,7 @@ library(reshape2)
 library(patchwork)
 library(knitr)
 
-# Project palette + theme (must match the manuscript figures —
-# defined in notebooks/Fig04_Sensitivity_VoI.Rmd)
+# Palette and theme of the paper figures (as in the scripts in figures/)
 palette_policy <- c("Optimal MDP"     = "#213C51",
                     "POMDP (PBVI)"    = "#574964",
                     "MCDA (TOPSIS)"   = "#5A7863",
@@ -57,16 +56,9 @@ theme_paper <- theme(
 In the companion paper (*Optimal Sequential Decision-Making for Error Propagation
 Mitigation in Digital Twins*), the ARX → HMM → MDP/POMDP pipeline is validated on
 a six-module **synthetic** digital-twin testbed with hand-injected fault regimes.
-Section 4.1 explicitly flags this as a limitation:
-
-> *All results are obtained on a simulated six-module digital twin testbed with
-> ARX surrogates and synthetically injected fault regimes. Validation on an
-> operational digital twin, ideally with historical fault records for calibrating
-> repair probabilities, remains an important next step.*
-
-This notebook addresses that limitation by re-running the entire pipeline on
-the **Tennessee Eastman Process (TEP)**, the de-facto industrial-process fault
-benchmark, and asks two questions:
+This notebook runs the same pipeline on the **Tennessee Eastman Process (TEP)**,
+a widely used benchmark for industrial process faults (Section 5.6.2 of the
+paper), and asks two questions:
 
 1. Do the same regime-extraction and policy-optimization steps work on real
    industrial data?
@@ -74,10 +66,9 @@ benchmark, and asks two questions:
    or does the realistic difficulty profile of TEP faults change the
    recommendation?
 
-We will see that the answer to (1) is *yes, with a few engineering adjustments*,
-and the answer to (2) is *the policy is identical even though the difficulty of
-each fault changes substantially*, which is itself a strong robustness statement
-for the framework.
+The answer to (1) is yes, after the adjustments described below. The answer
+to (2) is that the MDP policy is the same in all four regimes, although the
+detection accuracy of individual regimes changes substantially.
 
 # The Tennessee Eastman Process in one paragraph
 
@@ -394,9 +385,9 @@ ggplot(viz_df, aes(t, source, fill = regime)) +
   theme(panel.grid = element_blank(), axis.text.y = element_text(size = 14))
 ```
 
-The HMM tracks Drift and Nominal almost perfectly; SensorNoisy and DynamicsOff
-have visible misclassification stripes — exactly what we expect, and exactly
-what the confusion matrix will quantify.
+The decoded path follows the true regime for most samples (the single-seed
+accuracy is printed above). The misclassified stretches are summarised over
+all seeds by the confusion matrix below.
 
 # Monte-Carlo aggregation: A_NoAction and the confusion matrix
 
@@ -450,10 +441,11 @@ Here is where the interesting structural finding lives. We compare
 side-by-side against the synthetic numbers reported in the manuscript:
 
 ```{r compare-conf}
-acc_synth <- c(Nominal = 0.942, SensorNoisy = 0.21,
-               DynamicsOff = 0.799, Drift = 0.996)   # diag of O (output/data_driven/O_confusion.csv)
-diag_synth <- c(Nominal = 0.997, SensorNoisy = 0.985,
-                DynamicsOff = 0.907, Drift = 0.856)
+# synthetic-testbed values, written by R/SimulationPipeline.R (run_all.R step "pipeline")
+dd <- readRDS(file.path(Sys.getenv("DTMDP_ROOT", ".."), "output", "data_driven",
+                        "data_driven_matrices.rds"))
+acc_synth  <- dd$mcda_accuracy[states_pipeline]          # diagonal of O
+diag_synth <- diag(dd$A_NoAction)[states_pipeline]       # persistence per 20 ms
 
 tibble(
   Regime    = states_pipeline,
@@ -520,9 +512,11 @@ tibble(
 The TEP policy is **identical** to the synthetic-testbed policy across all
 four states. This is despite:
 
-- A_NoAction having visibly different persistence (TEP regimes are *more*
-  persistent overall; Drift in TEP has 0.99 persistence vs 0.86 in the
-  synthetic case).
+- A_NoAction having different persistence. Nominal and SensorNoisy persist
+  longer per step on TEP (`r sprintf("%.3f and %.3f", diag(A_NoAction_TEP)[["Nominal"]], diag(A_NoAction_TEP)[["SensorNoisy"]])`
+  against `r sprintf("%.3f and %.3f", diag_synth[["Nominal"]], diag_synth[["SensorNoisy"]])`),
+  while DynamicsOff and Drift persist slightly less. The time step also differs
+  (3 min on TEP, 20 ms on the testbed).
 - The classification difficulty profile inverting between SensorNoisy and
   DynamicsOff.
 
@@ -545,48 +539,43 @@ return on every starting regime.
 
 # POMDP behaviour at pure-state beliefs
 
-Running PBVI with TEP's confusion matrix as the observation model, the policy
-at the four pure-state beliefs reduces (as expected) to the MDP policy:
+`tep/TEP_Application.R` also solves the POMDP by PBVI with TEP's confusion
+matrix as the observation model. At the four pure-state beliefs the PBVI
+policy gives the same action as the MDP policy:
 
 ```{r pomdp}
 tibble(
-  Belief             = paste0("b = ", states_pipeline),
-  `POMDP action`     = policy_TEP[states_pipeline],
-  `MDP action`       = policy_synth,
-  `Same?`            = "✓"
+  Belief         = paste0("b = ", states_pipeline),
+  `POMDP action` = res$pomdp_pure[states_pipeline],
+  `MDP action`   = policy_TEP[states_pipeline],
+  `Same?`        = ifelse(res$pomdp_pure[states_pipeline] == policy_TEP[states_pipeline],
+                          "✓", "✗")
 ) %>%
-  kable(caption = paste("POMDP action at pure-state beliefs",
-                        "(133 alpha-vectors after PBVI convergence)"))
+  kable(caption = sprintf("PBVI action at pure-state beliefs (%d alpha vectors)",
+                          res$n_alpha))
 ```
 
-The interesting POMDP behaviour shows up at **mixed beliefs**, particularly
-along the Nominal–DynamicsOff edge (which is where TEP's confusion matrix
-puts most of its mass: 73.7% of true DynamicsOff observations are decoded as
-Nominal). At those uncertain beliefs, the POMDP rationally picks `NoAction`
-rather than committing to `ReidentPlant` — a conservative strategy that
-mirrors the SensorNoisy/Nominal ambiguity discussed in the manuscript's
-§3.4 belief-trajectory analysis. We do not reproduce the full belief sweep
-here; see `POMDPFormulation.R` and the manuscript's Figure 8 for the
-synthetic counterpart.
+The two policies can differ only at mixed beliefs. On TEP the largest
+ambiguity lies between Nominal and DynamicsOff:
+`r sprintf("%.1f%%", 100 * mcda_confusion_TEP["DynamicsOff", "Nominal"])` of true
+DynamicsOff samples are decoded as Nominal. This notebook does not sweep the
+mixed beliefs.
 
-# Why this strengthens the manuscript
+# Summary
 
-1. **§4.1 limitation is closed.** The pipeline runs end-to-end on real
-   industrial data with a publicly downloadable benchmark. No synthetic
-   fault injection is required at any layer.
-2. **The optimal policy is a robust property of the framework, not an
-   artefact of the synthetic testbed.** Two completely different difficulty
-   profiles produce the same recommendation.
-3. **The framework reveals controller masking** — IDV(1)'s 25% detection
-   accuracy is a real-world phenomenon (closed-loop controllers actively
-   compensate for setpoint disturbances and erase the residual signature).
-   This is a finding that the synthetic testbed could not have produced
-   because its plant had no feedback controller.
-4. **The end-to-end runtime is small** — the entire TEP pipeline (10 MC
-   trajectories, 5 HMM restarts each, value iteration, PBVI to 133 alpha-
-   vectors) completes in under three minutes on a desktop CPU, suggesting
-   the framework is deployable on a per-shift cadence in an operational
-   plant.
+1. The pipeline runs end to end on the TEP benchmark data. The fault regimes
+   come from the benchmark's own disturbance scenarios.
+2. The MDP policy is the same as on the synthetic testbed, although the two
+   difficulty profiles differ. The reward matrix and the repair probabilities
+   are the same engineering-judgment values in both cases, so this agreement
+   says more about the reward structure than about the data.
+3. IDV(1) is detected in only
+   `r sprintf("%.0f%%", 100 * mcda_accuracy_TEP[["DynamicsOff"]])` of samples.
+   The closed-loop controllers of the plant compensate for the feed-ratio step,
+   and the residual signature fades after the transient. The synthetic testbed
+   has no feedback controller, so it cannot show this effect.
+4. The whole TEP run (10 Monte Carlo trajectory builds, 5 HMM restarts each,
+   value iteration and PBVI) takes a few minutes on a desktop CPU.
 
 # Reproducing this notebook
 

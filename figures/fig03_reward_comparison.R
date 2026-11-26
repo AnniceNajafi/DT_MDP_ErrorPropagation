@@ -70,7 +70,8 @@ pA <- ggplot(band_df, aes(time, mean, colour = policy, fill = policy)) +
   theme_paper
 
 pB <- ggplot(frac_df, aes(policy, frac, colour = policy, fill = policy)) +
-  geom_jitter(width = 0.18, height = 0, size = 0.5, alpha = 0.18, show.legend = FALSE) +
+  geom_jitter(position = position_jitter(width = 0.18, height = 0, seed = 1),  # fixed seed: same figure every run
+              size = 0.5, alpha = 0.18, show.legend = FALSE) +
   geom_boxplot(width = 0.5, alpha = 0.35, outlier.shape = NA, linewidth = 0.6,
                colour = "black", show.legend = FALSE) +
   stat_summary(fun = mean, geom = "point", shape = 23, size = 2.8,

@@ -5,7 +5,7 @@
 #  causes in later steps. MDP, POMDP (PBVI solved to convergence), myopic belief, QMDP, k-Step,
 #  MCDA and No Intervention are evaluated with the per-sample simulator of Table 5, for the repair
 #  probabilities of Table 3 and for repair probabilities scaled by 0.1, and for c in {0.05, 0.1, 0.2}.
-#  (Discussion; Supplementary Section S6.4)
+#  (Discussion; Supplementary Section S6.10)
 # Run from the repository root:  Rscript analyses/fidelity_reward.R
 # Writes output/tables/Fidelity_Reward.txt and output/tables/Fidelity_Reward.csv
 Sys.setenv(DTMDP_REUSE_MATRICES = "1"); source(file.path(getwd(), "R", "paths.R"))

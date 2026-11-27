@@ -68,6 +68,8 @@ steps <- list(
        "BIC of the residual HMM for K = 2..7 (Section 4.2)"),
   list("pbvi_bounds", "analyses/pbvi_bounds_and_gap.R",
        "converged PBVI, value-of-information bracket, gap at perfect SensorNoisy accuracy (Sections 4.8, 5.3)"),
+  list("fidelity",    "analyses/fidelity_reward.R",
+       "policies under a reward based on the restoration of fidelity (Discussion, Supplementary S6.4)"),
   list("state_diag",  "analyses/state_diagnostics.R",
        "occupancy over time and POMDP mismatch decomposition (Section 5.4, Supplementary S5.2)"),
   list("comp_cost",   "analyses/Revision_ComputationalCost.R",

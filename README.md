@@ -79,6 +79,8 @@ analyses/                 tables and revision analyses (write to output/tables, 
   hmm_bic.R               BIC of the residual HMM for K = 2..7 (Section 4.2)
   pbvi_bounds_and_gap.R   converged PBVI, value-of-information bracket, and the
                           MDP-POMDP gap at perfect SensorNoisy accuracy (Sections 4.8, 5.3)
+  fidelity_reward.R       MDP, POMDP, QMDP, myopic belief, k-Step and MCDA under a reward
+                          based on the restoration of fidelity (Supplementary S6.4)
   state_diagnostics.R     occupancy over time; where the POMDP's action mismatches occur
   revision_analyses.R     CT-approximation error, PBVI initialisation, myopic/QMDP,
                           held-out causal O, misspecified/correlated observations,

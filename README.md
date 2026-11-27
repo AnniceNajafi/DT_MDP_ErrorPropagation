@@ -182,7 +182,7 @@ with the installed ones; `--exact` installs these versions with `remotes`):
 | tibble | 3.3.0 | |
 | expm | 1.0.0 | matrix exponential / logarithm |
 | Matrix | 1.7.3 | (dependency of expm) |
-| RMCDA | 0.3 | TOPSIS baseline |
+| RMCDA | 0.3 | TOPSIS baseline. RMCDA 0.3.1 applies the TOPSIS weights to the criteria (0.3 applied them to the rows of the decision matrix); with 0.3.1 the MCDA return of Table 5 is 8.629 against 8.625 with 0.3 (2,000 trajectories), so the reported values are unchanged at their precision |
 | ggplot2 | 4.0.3 | figures |
 | reshape2 | 1.4.4 | figures |
 | gridExtra | 2.3 | figures |
